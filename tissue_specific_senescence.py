@@ -8,6 +8,9 @@ Created on Thu Jan 22 12:22:40 2026
 import pymc as pm
 from sklearn import model_selection as model_sel
 from sklearn import linear_model as lin
+from sklearn import impute
+from sklearn import pipeline
+from sklearn import metrics
 import polars as pl
 from polars import selectors as cs
 
@@ -120,6 +123,34 @@ def filter_excess_missing(table :pl.DataFrame) -> pl.DataFrame:
     sufficiently_present = table.select(pl.col(tolerable_colnames))
     return sufficiently_present
 
+
+def build_enet_model():
+    """
+    builds an Elastic Net model using CV to choose alpha and L1 ratio,
+    using a KNNImputer to deal with missing data
+    """
+    imputer = impute.KNNImputer(n_neighbors=7,weights="uniform",keep_empty_features=True)
+    enet_cv = lin.ElasticNetCV(l1_ratio=[0.1, 0.2, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
+                               alphas=5,
+                               fit_intercept=True,
+                               cv=None,
+                               random_state=552)
+    pipe = pipeline.Pipeline([("imputer", imputer),("E.Net", enet_cv)])
+    return pipe
+
+
+def evaluate(model, x_test, y_test):
+    "Evaluate an arbitraty skikit-learn model on OOS data by its MSE, MAE, and R2"
+    
+    test_pred = model.predict(x_test)
+    
+    mse = metrics.mean_squared_error(y_test, test_pred)
+    mae = metrics.mean_absolute_error(y_test, test_pred)
+    r2 = metrics.r2_score(y_test, test_pred)
+    
+    return {"MSE": mse, "MAE": mae, "R2": r2}
+
+
 if __name__ == '__main__':
     organs, olink, serum_proteome, sample_desc = load_data()
     table1 = ready_table1(organs, serum_proteome, sample_desc)
@@ -131,14 +162,39 @@ if __name__ == '__main__':
                        .to_dummies(["Strain", "Sex"])
                        )
     
-    '''
-    y_variables = table1p_numeric.select(cs.ends_with("p16"),
-                                         cs.ends_with("p21"),
-                                         cs.ends_with("gH2AX"))
-    x_variables = table1p_numeric.select(cs.exclude([cs.ends_with("p16"),
-                                         cs.ends_with("p21"),
-                                         cs.ends_with("gH2AX")]))
-    '''
+    y_cols = table1p_numeric.select(cs.ends_with("p16"),
+                                    cs.ends_with("p21"),
+                                    cs.ends_with("gH2AX"))
+    x_cols = table1p_numeric.select(cs.exclude([cs.ends_with("p16"),
+                                    cs.ends_with("p21"),
+                                    cs.ends_with("gH2AX")]))
     
     
+    x_train, x_test, y_vars_train, y_vars_test = model_sel.train_test_split(x_cols, 
+                               y_cols, 
+                               test_size=TEST_FRAC, 
+                               random_state=2026_01_22)
+    
+    enet_perf = {}
+    enets = {}
+    
+    for idx in range(y_vars_train.shape[1]):
+        
+        target_name = y_vars_train.columns[idx]
+        
+        y_train = y_vars_train[:,idx]
+        y_test = y_vars_test[:,idx]
+        
+        enet_model = build_enet_model()
+        
+        enet_model.fit(x_train, y_train)
+        
+        perf_oos = evaluate(enet_model, x_test, y_test)
+        
+        enet_perf[target_name] = perf_oos
+        enets[target_name] = enet_model
+        
+        
+        
+        
     
