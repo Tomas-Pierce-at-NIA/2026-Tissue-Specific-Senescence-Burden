@@ -10,6 +10,7 @@ from sklearn import model_selection as model_sel
 from sklearn import linear_model as lin
 from sklearn import impute
 from sklearn import pipeline
+from sklearn import preprocessing as pre
 from sklearn import metrics
 import polars as pl
 from polars import selectors as cs
@@ -129,13 +130,18 @@ def build_enet_model():
     builds an Elastic Net model using CV to choose alpha and L1 ratio,
     using a KNNImputer to deal with missing data
     """
-    imputer = impute.KNNImputer(n_neighbors=7,weights="uniform",keep_empty_features=True)
+    imputer = impute.KNNImputer(n_neighbors=5,weights="uniform",keep_empty_features=True)
+    standard = pre.StandardScaler()
     enet_cv = lin.ElasticNetCV(l1_ratio=[0.1, 0.2, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
-                               alphas=5,
+                               alphas=10,
                                fit_intercept=True,
-                               cv=None,
-                               random_state=552)
-    pipe = pipeline.Pipeline([("imputer", imputer),("E.Net", enet_cv)])
+                               cv=5,
+                               random_state=552,
+                               max_iter=30_000,
+                               n_jobs=10)
+    pipe = pipeline.Pipeline([("imputer", imputer),
+                              ("standardizer", standard),
+                              ("E.Net", enet_cv)])
     return pipe
 
 
@@ -153,6 +159,7 @@ def evaluate(model, x_test, y_test):
 
 if __name__ == '__main__':
     organs, olink, serum_proteome, sample_desc = load_data()
+    print("loaded")
     table1 = ready_table1(organs, serum_proteome, sample_desc)
     table1_present = filter_excess_missing(table1)
     table1p_numeric = (table1_present
@@ -177,7 +184,7 @@ if __name__ == '__main__':
     
     enet_perf = {}
     enets = {}
-    
+    print("ready")
     for idx in range(y_vars_train.shape[1]):
         
         target_name = y_vars_train.columns[idx]
@@ -185,15 +192,24 @@ if __name__ == '__main__':
         y_train = y_vars_train[:,idx]
         y_test = y_vars_test[:,idx]
         
+        no_example = y_train.is_null()
+        y_train_local = y_train.filter(~no_example)
+        x_train_local = x_train.filter(~no_example)
+        
         enet_model = build_enet_model()
         
-        enet_model.fit(x_train, y_train)
+        enet_model.fit(x_train_local, y_train_local)
         
-        perf_oos = evaluate(enet_model, x_test, y_test)
+        no_result = y_test.is_null()
+        y_test_local = y_test.filter(~no_result)
+        x_test_local = x_test.filter(~no_result)
+        
+        perf_oos = evaluate(enet_model, x_test_local, y_test_local)
         
         enet_perf[target_name] = perf_oos
         enets[target_name] = enet_model
         
+        print("*")
         
         
         
