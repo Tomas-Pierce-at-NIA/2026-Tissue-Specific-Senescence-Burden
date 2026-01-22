@@ -132,7 +132,7 @@ def build_enet_model():
     """
     imputer = impute.KNNImputer(n_neighbors=5,weights="uniform",keep_empty_features=True)
     standard = pre.StandardScaler()
-    enet_cv = lin.ElasticNetCV(l1_ratio=[0.1, 0.2, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
+    enet_cv = lin.ElasticNetCV(l1_ratio=[0.05, 0.1, 0.2, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
                                alphas=10,
                                fit_intercept=True,
                                cv=5,
@@ -142,6 +142,19 @@ def build_enet_model():
     pipe = pipeline.Pipeline([("imputer", imputer),
                               ("standardizer", standard),
                               ("E.Net", enet_cv)])
+    return pipe
+
+
+def build_ard_model():
+    """
+    builds an ARD model with a KNNImputer to deal with missing data
+    """
+    imputer = impute.KNNImputer(n_neighbors=5,weights="uniform",keep_empty_features=True)
+    standard = pre.StandardScaler()
+    ard = lin.ARDRegression(max_iter=900)
+    pipe = pipeline.Pipeline([("imputer", imputer),
+                              ("standardizer", standard),
+                              ("ARD", ard)])
     return pipe
 
 
@@ -184,6 +197,10 @@ if __name__ == '__main__':
     
     enet_perf = {}
     enets = {}
+    
+    ard_perf = {}
+    ards = {}
+    
     print("ready")
     for idx in range(y_vars_train.shape[1]):
         
@@ -198,19 +215,24 @@ if __name__ == '__main__':
         
         enet_model = build_enet_model()
         
+        ard_model = build_ard_model()
+        
         enet_model.fit(x_train_local, y_train_local)
+        ard_model.fit(x_train_local, y_train_local)
         
         no_result = y_test.is_null()
         y_test_local = y_test.filter(~no_result)
         x_test_local = x_test.filter(~no_result)
         
-        perf_oos = evaluate(enet_model, x_test_local, y_test_local)
+        enet_perf_oos = evaluate(enet_model, x_test_local, y_test_local)
         
-        enet_perf[target_name] = perf_oos
+        ard_perf_oos = evaluate(ard_model, x_test_local, y_test_local)
+        
+        enet_perf[target_name] = enet_perf_oos
         enets[target_name] = enet_model
+        
+        ard_perf[target_name] = ard_perf_oos
+        ards[target_name] = ard_model
         
         print("*")
         
-        
-        
-    
