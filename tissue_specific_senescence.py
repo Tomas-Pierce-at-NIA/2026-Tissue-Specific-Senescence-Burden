@@ -6,13 +6,17 @@ Created on Thu Jan 22 12:22:40 2026
 """
 
 import pymc as pm
-from sklearn import model_selection as modsel
+from sklearn import model_selection as model_sel
+from sklearn import linear_model as lin
 import polars as pl
 from polars import selectors as cs
 
 # fraction of missing data we are willing to tolerate at most before
 # we will not attempt to use that column
 MISSINGNESS_TOL = 0.10
+
+# fraction of data held out for testing
+TEST_FRAC = 0.25
 
 def load_data() -> (pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame):
     "Load data from disk"
@@ -90,10 +94,30 @@ def ready_table1(organs :pl.DataFrame, serum_proteome :pl.DataFrame, sample_desc
                          validate="1:1")
     return table1
 
+def filter_excess_missing(table :pl.DataFrame) -> pl.DataFrame:
+    "Create new dataframe with no column exceeding our missingness tolerance"
+    missingness = table.null_count() / table.shape[0]
+    tolerable_colnames = [col for idx, col in enumerate(missingness.columns) if missingness[0,idx] <= MISSINGNESS_TOL]
+    sufficiently_present = table.select(pl.col(tolerable_colnames))
+    return sufficiently_present
 
 if __name__ == '__main__':
     organs, olink, serum_proteome, sample_desc = load_data()
     table1 = ready_table1(organs, serum_proteome, sample_desc)
+    table1_present = filter_excess_missing(table1)
+    table1p_numeric = (table1_present
+                       # don't need to track b/c all samples from diff animals - iid
+                       .select(cs.exclude(["Animal Tag", "Sample Name"]))
+                       # need to enable learners which don't tolerate strings
+                       .to_dummies(["Strain", "Sex"])
+                       )
+    y_variables = table1p_numeric.select(cs.ends_with("p16"),
+                                         cs.ends_with("p21"),
+                                         cs.ends_with("gH2AX"))
+    x_variables = table1p_numeric.select(cs.exclude([cs.ends_with("p16"),
+                                         cs.ends_with("p21"),
+                                         cs.ends_with("gH2AX")]))
+    
     
     
     
