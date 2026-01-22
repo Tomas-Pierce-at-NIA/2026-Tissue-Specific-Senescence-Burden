@@ -1,0 +1,3 @@
+False means that the sample was not run for Olink.  NA means that the values were below or above (generally below) the detectable range.
+
+Source: Nate Price, Personal Communication

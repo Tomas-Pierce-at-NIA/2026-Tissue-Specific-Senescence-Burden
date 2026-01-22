@@ -22,7 +22,7 @@ def load_data() -> (pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame):
     "Load data from disk"
     
     # contains both organ senescence markers and serum olink
-    SENESCENCE_FILE = "data/Multiorgan_senescence_and_Olink.xlsx"
+    SENESCENCE_FILE = "data/Multiorgan_senescence_and_Olink.csv"
     # contains only serum LC-MS proteomics
     SERUM_FILE = "data/Mouse Serum Samples (280 samples)_Protein_Group_Panel.tsv"
     # maps between organ senescence / olink samples and serum proteomics
@@ -45,9 +45,28 @@ def load_data() -> (pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame):
                            "Strain",
                            "Age group (3 groups)"]
     
+    
+    # cursed format convention makes the least painful exercise loading as 
+    # strings and doing the conversions ourself
+    organ_senescence = pl.read_csv(SENESCENCE_FILE,
+                                   missing_utf8_is_empty_string=False, 
+                                   infer_schema=False)
+    organ_senescence = organ_senescence.select(pl.all().replace(None, "0.0"))
+    organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("FALSE"), None))
+    organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("excluded"), None))
+    organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("NA"), None))
+    organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("needs second IHC"), None))
+    organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("no image"), None))
+    
+    organ_senescence = (organ_senescence
+                        .select(
+                            pl.col(["Animal Tag", "Strain", "Sex"]),
+                            cs.exclude(["Animal Tag", "Strain", "Sex"]).cast(pl.Float64)
+                            )
+                        )
+    
     # split organ senescence from serum OLINK
-    organ_senescence = pl.read_excel(SENESCENCE_FILE,
-                                     schema_overrides={'Animal Tag': pl.String})
+    
     organs = organ_senescence.select(
         pl.col('Animal Tag'),
         pl.col('Strain'),
@@ -111,13 +130,15 @@ if __name__ == '__main__':
                        # need to enable learners which don't tolerate strings
                        .to_dummies(["Strain", "Sex"])
                        )
+    
+    '''
     y_variables = table1p_numeric.select(cs.ends_with("p16"),
                                          cs.ends_with("p21"),
                                          cs.ends_with("gH2AX"))
     x_variables = table1p_numeric.select(cs.exclude([cs.ends_with("p16"),
                                          cs.ends_with("p21"),
                                          cs.ends_with("gH2AX")]))
-    
+    '''
     
     
     
