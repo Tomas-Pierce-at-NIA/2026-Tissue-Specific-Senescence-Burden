@@ -8,12 +8,17 @@ Created on Thu Jan 22 12:22:40 2026
 import pymc as pm
 from sklearn import model_selection as model_sel
 from sklearn import linear_model as lin
+from sklearn import ensemble
 from sklearn import impute
 from sklearn import pipeline
 from sklearn import preprocessing as pre
 from sklearn import metrics
 import polars as pl
 from polars import selectors as cs
+from scipy import stats
+
+from matplotlib import pyplot
+#import numpy as np
 
 # fraction of missing data we are willing to tolerate at most before
 # we will not attempt to use that column
@@ -127,6 +132,37 @@ def filter_excess_missing(table :pl.DataFrame) -> pl.DataFrame:
     return sufficiently_present
 
 
+def build_robust_model():
+    """
+    builds a linear model using Huber loss to be outlier resistant,
+    using elastic net penalty to try and regularize & select vars
+    using CV to choose alpha and L1 ratio,
+    using KNNImputer to deal with missing data
+    and standardizing input variables,
+    fitting by SGD algorithm
+    """
+    imputer = impute.KNNImputer(n_neighbors=5,weights="uniform",keep_empty_features=True)
+    standard = pre.StandardScaler()
+    sgd = lin.SGDRegressor(loss="huber", 
+                           penalty="elasticnet", 
+                           random_state=1258,
+                           max_iter=10_000)
+    cv_search = model_sel.RandomizedSearchCV(sgd,
+                                             {"alpha": stats.expon(scale=0.2),
+                                              "l1_ratio": stats.beta(a=1, b=3),
+                                              "epsilon": stats.beta(a=2, b=2)},
+                                             refit=True,
+                                             random_state=2026_01,
+                                             n_iter=16,
+                                             n_jobs=10)
+    pipe = pipeline.Pipeline([("imputer", imputer),
+                              ("standardizer", standard),
+                              ("cv_sgd", cv_search)])
+    return pipe
+    
+    #model_sel.RandomizedSearchCV()
+
+
 def build_enet_model():
     """
     builds an Elastic Net model using CV to choose alpha and L1 ratio,
@@ -138,9 +174,10 @@ def build_enet_model():
                                alphas=10,
                                fit_intercept=True,
                                cv=5,
-                               random_state=552,
+                               random_state=552+1,
                                max_iter=30_000,
-                               n_jobs=10)
+                               n_jobs=10,
+                               selection="random")
     pipe = pipeline.Pipeline([("imputer", imputer),
                               ("standardizer", standard),
                               ("E.Net", enet_cv)])
@@ -159,17 +196,39 @@ def build_ard_model():
                               ("ARD", ard)])
     return pipe
 
+def build_hgb_model():
+    """
+    builds a ensemble tree model (specifically histogram-based gradient boosting)
+    has independent means of handling missing data
 
-def evaluate(model, x_test, y_test):
+    """
+    forest = ensemble.HistGradientBoostingRegressor(l2_regularization=0.01,
+                                                    max_features=0.8,
+                                                    random_state=1206)
+    return forest
+    
+
+
+def evaluate(model, x_test, y_test, title=""):
     "Evaluate an arbitraty skikit-learn model on OOS data by its MSE, MAE, and R2"
     
     test_pred = model.predict(x_test)
     
     mse = metrics.mean_squared_error(y_test, test_pred)
     mae = metrics.mean_absolute_error(y_test, test_pred)
-    r2 = metrics.r2_score(y_test, test_pred)
+    #r2 = metrics.r2_score(y_test, test_pred)
     
-    return {"MSE": mse, "MAE": mae, "R2": r2}
+    ped = metrics.PredictionErrorDisplay(y_true=y_test.to_numpy(),
+                                         y_pred=test_pred)
+    
+    ped.plot(kind="residual_vs_predicted")
+    pyplot.title(title)
+    pyplot.show()
+    ped.plot(kind="actual_vs_predicted")
+    pyplot.title(title)
+    pyplot.show()
+    
+    return {"MSE": mse, "MAE": mae}
 
 
 if __name__ == '__main__':
@@ -184,8 +243,6 @@ if __name__ == '__main__':
                        .to_dummies(["Strain", "Sex"])
                        )
     
-    assert False
-    
     y_cols = table1p_numeric.select(cs.ends_with("p16"),
                                     cs.ends_with("p21"),
                                     cs.ends_with("gH2AX"))
@@ -197,13 +254,19 @@ if __name__ == '__main__':
     x_train, x_test, y_vars_train, y_vars_test = model_sel.train_test_split(x_cols, 
                                y_cols, 
                                test_size=TEST_FRAC, 
-                               random_state=2026_01_22)
+                               random_state=2026_01_22+1)
     
     enet_perf = {}
     enets = {}
     
     ard_perf = {}
     ards = {}
+    
+    forests_perf = {}
+    forests = {}
+    
+    robust_perf = {}
+    robusts = {}
     
     print("ready")
     for idx in range(y_vars_train.shape[1]):
@@ -221,16 +284,38 @@ if __name__ == '__main__':
         
         ard_model = build_ard_model()
         
+        forest_model = build_hgb_model()
+        
+        robust_model = build_robust_model()
+        
         enet_model.fit(x_train_local, y_train_local)
         ard_model.fit(x_train_local, y_train_local)
+        forest_model.fit(x_train_local, y_train_local)
+        robust_model.fit(x_train_local, y_train_local)
         
         no_result = y_test.is_null()
         y_test_local = y_test.filter(~no_result)
         x_test_local = x_test.filter(~no_result)
         
-        enet_perf_oos = evaluate(enet_model, x_test_local, y_test_local)
+        enet_perf_oos = evaluate(enet_model, 
+                                 x_test_local, 
+                                 y_test_local, 
+                                 f"E.Net {target_name}")
         
-        ard_perf_oos = evaluate(ard_model, x_test_local, y_test_local)
+        ard_perf_oos = evaluate(ard_model, 
+                                x_test_local, 
+                                y_test_local,
+                                f"ARD {target_name}")
+        
+        forest_perf_oos = evaluate(forest_model,
+                               x_test_local,
+                               y_test_local,
+                               f"Hist Grad Boost {target_name}")
+        
+        robust_perf_oos = evaluate(robust_model,
+                                   x_test_local,
+                                   y_test_local,
+                                   f"Huber SGD ElasticNet {target_name}")
         
         enet_perf[target_name] = enet_perf_oos
         enets[target_name] = enet_model
@@ -238,5 +323,10 @@ if __name__ == '__main__':
         ard_perf[target_name] = ard_perf_oos
         ards[target_name] = ard_model
         
-        print("*")
+        forests_perf[target_name] = forest_perf_oos
+        forests[target_name] = forest_model
         
+        robust_perf[target_name] = robust_perf_oos
+        robusts[target_name] = robust_model
+        
+        print("*")
