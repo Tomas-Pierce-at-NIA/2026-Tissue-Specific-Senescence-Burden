@@ -13,19 +13,21 @@ from sklearn import impute
 from sklearn import pipeline
 from sklearn import preprocessing as pre
 from sklearn import metrics
+from sklearn import dummy
 import polars as pl
 from polars import selectors as cs
 from scipy import stats
 
+import numpy as np
 from matplotlib import pyplot
 #import numpy as np
 
 # fraction of missing data we are willing to tolerate at most before
 # we will not attempt to use that column
-MISSINGNESS_TOL = 0.10
+MISSINGNESS_TOL = 0.20
 
 # fraction of data held out for testing
-TEST_FRAC = 0.25
+TEST_FRAC = 0.20
 
 def load_data() -> (pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame):
     "Load data from disk"
@@ -142,21 +144,22 @@ def build_robust_model():
     fitting by SGD algorithm
     """
     imputer = impute.KNNImputer(n_neighbors=5,weights="uniform",keep_empty_features=True)
-    standard = pre.StandardScaler()
+    #standard = pre.StandardScaler()
+    robust_scaler = pre.RobustScaler()
     sgd = lin.SGDRegressor(loss="huber", 
                            penalty="elasticnet", 
                            random_state=1258,
                            max_iter=10_000)
     cv_search = model_sel.RandomizedSearchCV(sgd,
                                              {"alpha": stats.expon(scale=0.2),
-                                              "l1_ratio": stats.beta(a=1, b=3),
+                                              "l1_ratio": stats.beta(a=3, b=1),
                                               "epsilon": stats.beta(a=2, b=2)},
                                              refit=True,
                                              random_state=2026_01,
-                                             n_iter=16,
+                                             n_iter=100,
                                              n_jobs=10)
     pipe = pipeline.Pipeline([("imputer", imputer),
-                              ("standardizer", standard),
+                              ("robust_scaling", robust_scaler),
                               ("cv_sgd", cv_search)])
     return pipe
     
@@ -169,7 +172,8 @@ def build_enet_model():
     using a KNNImputer to deal with missing data
     """
     imputer = impute.KNNImputer(n_neighbors=5,weights="uniform",keep_empty_features=True)
-    standard = pre.StandardScaler()
+    #standard = pre.StandardScaler()
+    robust_scale = pre.RobustScaler()
     enet_cv = lin.ElasticNetCV(l1_ratio=[0.05, 0.1, 0.2, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
                                alphas=10,
                                fit_intercept=True,
@@ -179,7 +183,7 @@ def build_enet_model():
                                n_jobs=10,
                                selection="random")
     pipe = pipeline.Pipeline([("imputer", imputer),
-                              ("standardizer", standard),
+                              ("robust_scaling", robust_scale),
                               ("E.Net", enet_cv)])
     return pipe
 
@@ -189,24 +193,31 @@ def build_ard_model():
     builds an ARD model with a KNNImputer to deal with missing data
     """
     imputer = impute.KNNImputer(n_neighbors=5,weights="uniform",keep_empty_features=True)
-    standard = pre.StandardScaler()
+    #standard = pre.StandardScaler()
+    robust_scaler = pre.RobustScaler()
     ard = lin.ARDRegression(max_iter=900)
     pipe = pipeline.Pipeline([("imputer", imputer),
-                              ("standardizer", standard),
+                              ("robust_scaler", robust_scaler),
                               ("ARD", ard)])
     return pipe
 
 def build_hgb_model():
     """
     builds a ensemble tree model (specifically histogram-based gradient boosting)
-    has independent means of handling missing data
+    has independent means of handling missing data but use imputation anyway
+    to also use robust scaling
 
     """
+    imputer = impute.KNNImputer(n_neighbors=5, weights="uniform",keep_empty_features=True)
+    robust_scaler = pre.RobustScaler()
     forest = ensemble.HistGradientBoostingRegressor(l2_regularization=0.01,
-                                                    max_features=0.8,
-                                                    random_state=1206)
-    return forest
-    
+                                                    max_features=1.0,
+                                                    random_state=1206,
+                                                    interaction_cst="pairwise")
+    pipe = pipeline.Pipeline([("imputer", imputer),
+                              ("robust_scaler", robust_scaler),
+                              ("histgrad boost", forest)])
+    return pipe
 
 
 def evaluate(model, x_test, y_test, title=""):
@@ -216,39 +227,28 @@ def evaluate(model, x_test, y_test, title=""):
     
     mse = metrics.mean_squared_error(y_test, test_pred)
     mae = metrics.mean_absolute_error(y_test, test_pred)
-    #r2 = metrics.r2_score(y_test, test_pred)
+    r2 = metrics.r2_score(y_test, test_pred)
     
     ped = metrics.PredictionErrorDisplay(y_true=y_test.to_numpy(),
                                          y_pred=test_pred)
     
     ped.plot(kind="residual_vs_predicted")
     pyplot.title(title)
+    pyplot.savefig(f"out/residuals_{title}.png")
     pyplot.show()
     ped.plot(kind="actual_vs_predicted")
     pyplot.title(title)
+    pyplot.savefig(f"out/actuals_{title}.png")
     pyplot.show()
     
-    return {"MSE": mse, "MAE": mae}
+    return {"MSE": mse, "MAE": mae, "R2": r2}
 
 
-if __name__ == '__main__':
-    organs, olink, serum_proteome, sample_desc = load_data()
-    print("loaded")
-    table1 = ready_table1(organs, serum_proteome, sample_desc)
-    table1_present = filter_excess_missing(table1)
-    table1p_numeric = (table1_present
-                       # don't need to track b/c all samples from diff animals - iid
-                       .select(cs.exclude(["Animal Tag", "Sample Name"]))
-                       # need to enable learners which don't tolerate strings
-                       .to_dummies(["Strain", "Sex"])
-                       )
-    
-    y_cols = table1p_numeric.select(cs.ends_with("p16"),
-                                    cs.ends_with("p21"),
-                                    cs.ends_with("gH2AX"))
-    x_cols = table1p_numeric.select(cs.exclude([cs.ends_with("p16"),
-                                    cs.ends_with("p21"),
-                                    cs.ends_with("gH2AX")]))
+def attempt_multiple_models(x_cols, y_cols):
+    """
+    Evaluate multiple different model strategies by using this dataset
+    split into a test and train split
+    """
     
     
     x_train, x_test, y_vars_train, y_vars_test = model_sel.train_test_split(x_cols, 
@@ -267,6 +267,9 @@ if __name__ == '__main__':
     
     robust_perf = {}
     robusts = {}
+    
+    dummy_perf = {}
+    dummies = {}
     
     print("ready")
     for idx in range(y_vars_train.shape[1]):
@@ -288,6 +291,10 @@ if __name__ == '__main__':
         
         robust_model = build_robust_model()
         
+        dummy_model = dummy.DummyRegressor(strategy="median")
+        
+        dummy_model.fit(x_train_local, y_train_local)
+        
         enet_model.fit(x_train_local, y_train_local)
         ard_model.fit(x_train_local, y_train_local)
         forest_model.fit(x_train_local, y_train_local)
@@ -296,6 +303,11 @@ if __name__ == '__main__':
         no_result = y_test.is_null()
         y_test_local = y_test.filter(~no_result)
         x_test_local = x_test.filter(~no_result)
+        
+        dummy_oos = evaluate(dummy_model,
+                             x_test_local,
+                             y_test_local,
+                             f"Dummy model {target_name}")
         
         enet_perf_oos = evaluate(enet_model, 
                                  x_test_local, 
@@ -329,4 +341,62 @@ if __name__ == '__main__':
         robust_perf[target_name] = robust_perf_oos
         robusts[target_name] = robust_model
         
+        dummy_perf[target_name] = dummy_oos
+        dummies[target_name] = dummy_model
+        
         print("*")
+    perfs = (enet_perf, ard_perf, forests_perf, robust_perf, dummy_perf)
+    models = (enets, ards, forests, robusts, dummies)
+    kinds = ("E Net", "ARD", "HistGradBoost", "Robust", "Dummy")
+    return perfs, models, kinds
+
+
+def display_relative_perf(perfs, kinds, target:str):
+    mse = [perfs[i][target]['MSE'] for i in range(len(perfs))]
+    x_pos = np.arange(len(mse))
+    pyplot.bar(x_pos, mse)
+    pyplot.xticks(x_pos, kinds)
+    pyplot.title(f"MSE - {target}")
+    pyplot.savefig("out/multimodel_MSE.png")
+    pyplot.show()
+    
+    mae = [perfs[i][target]['MAE'] for i in range(len(perfs))]
+    x_pos = np.arange(len(mae))
+    pyplot.bar(x_pos, mae)
+    pyplot.xticks(x_pos, kinds)
+    pyplot.title(f"MAE - {target}")
+    pyplot.savefig("out/multimodel_MAE.png")
+    pyplot.show()
+    
+    r2 = [perfs[i][target]['R2'] for i in range(len(perfs))]
+    x_pos = np.arange(len(r2))
+    pyplot.bar(x_pos, r2)
+    pyplot.xticks(x_pos, kinds)
+    pyplot.title(f"R2 - {target}")
+    pyplot.savefig("out/multimodel_R2.png")
+    pyplot.show()
+
+
+
+if __name__ == '__main__':
+    organs, olink, serum_proteome, sample_desc = load_data()
+    print("loaded")
+    table1 = ready_table1(organs, serum_proteome, sample_desc)
+    table1_present = filter_excess_missing(table1)
+    table1p_numeric = (table1_present
+                       # don't need to track b/c all samples from diff animals - iid
+                       .select(cs.exclude(["Animal Tag", "Sample Name"]))
+                       # need to enable learners which don't tolerate strings
+                       .to_dummies(["Strain", "Sex"])
+                       )
+    
+    y_cols = table1p_numeric.select(cs.ends_with("p16"),
+                                    cs.ends_with("p21"),
+                                    cs.ends_with("gH2AX"))
+    x_cols = table1p_numeric.select(cs.exclude([cs.ends_with("p16"),
+                                    cs.ends_with("p21"),
+                                    cs.ends_with("gH2AX")]))
+    perfs, models, kinds = attempt_multiple_models(x_cols, y_cols)
+    for y_colname in y_cols.columns:
+        display_relative_perf(perfs, kinds, y_colname)
+    
