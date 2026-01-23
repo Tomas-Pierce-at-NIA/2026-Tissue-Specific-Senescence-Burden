@@ -184,7 +184,7 @@ def build_enet_model():
                                selection="random")
     pipe = pipeline.Pipeline([("imputer", imputer),
                               ("robust_scaling", robust_scale),
-                              ("E.Net", enet_cv)])
+                              ("Elastic Net", enet_cv)])
     return pipe
 
 
@@ -312,12 +312,7 @@ def attempt_multiple_models(x_cols, y_cols):
         enet_perf_oos = evaluate(enet_model, 
                                  x_test_local, 
                                  y_test_local, 
-                                 f"E.Net {target_name}")
-        
-        ard_perf_oos = evaluate(ard_model, 
-                                x_test_local, 
-                                y_test_local,
-                                f"ARD {target_name}")
+                                 f"Elastic Net {target_name}")
         
         forest_perf_oos = evaluate(forest_model,
                                x_test_local,
@@ -332,9 +327,6 @@ def attempt_multiple_models(x_cols, y_cols):
         enet_perf[target_name] = enet_perf_oos
         enets[target_name] = enet_model
         
-        ard_perf[target_name] = ard_perf_oos
-        ards[target_name] = ard_model
-        
         forests_perf[target_name] = forest_perf_oos
         forests[target_name] = forest_model
         
@@ -345,9 +337,9 @@ def attempt_multiple_models(x_cols, y_cols):
         dummies[target_name] = dummy_model
         
         print("*")
-    perfs = (enet_perf, ard_perf, forests_perf, robust_perf, dummy_perf)
-    models = (enets, ards, forests, robusts, dummies)
-    kinds = ("E Net", "ARD", "HistGradBoost", "Robust", "Dummy")
+    perfs = (enet_perf, forests_perf, robust_perf, dummy_perf)
+    models = (enets, forests, robusts, dummies)
+    kinds = ("ElasticNet", "HistGradBoost", "Robust", "Dummy")
     return perfs, models, kinds
 
 
@@ -357,7 +349,7 @@ def display_relative_perf(perfs, kinds, target:str):
     pyplot.bar(x_pos, mse)
     pyplot.xticks(x_pos, kinds)
     pyplot.title(f"MSE - {target}")
-    pyplot.savefig("out/multimodel_MSE.png")
+    pyplot.savefig(f"out/multimodel_MSE_{target}.png")
     pyplot.show()
     
     mae = [perfs[i][target]['MAE'] for i in range(len(perfs))]
@@ -365,7 +357,7 @@ def display_relative_perf(perfs, kinds, target:str):
     pyplot.bar(x_pos, mae)
     pyplot.xticks(x_pos, kinds)
     pyplot.title(f"MAE - {target}")
-    pyplot.savefig("out/multimodel_MAE.png")
+    pyplot.savefig(f"out/multimodel_MAE_{target}.png")
     pyplot.show()
     
     r2 = [perfs[i][target]['R2'] for i in range(len(perfs))]
@@ -373,7 +365,7 @@ def display_relative_perf(perfs, kinds, target:str):
     pyplot.bar(x_pos, r2)
     pyplot.xticks(x_pos, kinds)
     pyplot.title(f"R2 - {target}")
-    pyplot.savefig("out/multimodel_R2.png")
+    pyplot.savefig(f"out/multimodel_R2_{target}.png")
     pyplot.show()
 
 
