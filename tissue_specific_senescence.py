@@ -55,7 +55,9 @@ def load_data() -> (pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame):
     organ_senescence = pl.read_csv(SENESCENCE_FILE,
                                    missing_utf8_is_empty_string=False, 
                                    infer_schema=False)
-    organ_senescence = organ_senescence.select(pl.all().replace(None, "0.0"))
+    
+    # not confident with imputation yet regarding OLINK, so leave as is
+    #organ_senescence = organ_senescence.select(pl.all().replace(None, "0.0"))
     organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("FALSE"), None))
     organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("excluded"), None))
     organ_senescence = organ_senescence.select(pl.all().replace(pl.lit("NA"), None))
@@ -181,6 +183,8 @@ if __name__ == '__main__':
                        # need to enable learners which don't tolerate strings
                        .to_dummies(["Strain", "Sex"])
                        )
+    
+    assert False
     
     y_cols = table1p_numeric.select(cs.ends_with("p16"),
                                     cs.ends_with("p21"),
