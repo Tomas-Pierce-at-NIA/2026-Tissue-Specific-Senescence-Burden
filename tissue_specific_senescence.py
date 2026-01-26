@@ -5,7 +5,6 @@ Created on Thu Jan 22 12:22:40 2026
 @author: piercetf
 """
 
-import pymc as pm
 from sklearn import model_selection as model_sel
 from sklearn import linear_model as lin
 from sklearn import ensemble
@@ -14,6 +13,7 @@ from sklearn import pipeline
 from sklearn import preprocessing as pre
 from sklearn import metrics
 from sklearn import dummy
+from sklearn import decomposition as decomp
 import polars as pl
 from polars import selectors as cs
 from scipy import stats
@@ -210,12 +210,15 @@ def build_hgb_model():
     """
     imputer = impute.KNNImputer(n_neighbors=5, weights="uniform",keep_empty_features=True)
     robust_scaler = pre.RobustScaler()
-    forest = ensemble.HistGradientBoostingRegressor(l2_regularization=0.01,
-                                                    max_features=1.0,
+    pca = decomp.PCA(n_components=10, random_state=1_26)
+    forest = ensemble.HistGradientBoostingRegressor(l2_regularization=0.001,
+                                                    max_iter=500,
+                                                    max_features=0.9,
                                                     random_state=1206,
                                                     interaction_cst="pairwise")
     pipe = pipeline.Pipeline([("imputer", imputer),
                               ("robust_scaler", robust_scaler),
+                              ("pca", pca),
                               ("histgrad boost", forest)])
     return pipe
 
@@ -258,9 +261,6 @@ def attempt_multiple_models(x_cols, y_cols):
     
     enet_perf = {}
     enets = {}
-    
-    ard_perf = {}
-    ards = {}
     
     forests_perf = {}
     forests = {}
