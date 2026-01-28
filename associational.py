@@ -350,5 +350,5 @@ if __name__ == '__main__':
     test_sk_p16, test_sk_p16_x = clear_null_resp(y_tests["SK p16"], x_test)
     model = build_horseshoe_model(train_sk_p16_x, train_sk_p16)
     compiled_model = nutpie.compile_pymc_model(model, backend="jax")
-    #trace = nutpie.sample(compiled_model)
-    #trace = nutpie.sample(compiled_model)
+    trace = nutpie.sample(compiled_model, tune=2_000, draws=6_000)
+    
