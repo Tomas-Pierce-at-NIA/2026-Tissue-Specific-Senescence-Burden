@@ -1,7 +1,5 @@
 
-from IPython.core.debugger import set_trace
 
-#import pandas as pd
 import nutpie
 import pymc as pm
 import arviz as az
@@ -9,13 +7,8 @@ from matplotlib import pyplot
 import polars as pl
 import numpy as np
 from polars import selectors as cs
-
-from sklearn import pipeline
 from sklearn import model_selection as model_select
-from sklearn import feature_selection as feat_select
-from sklearn import preprocessing as pre
 from sklearn.impute import KNNImputer
-from sklearn import linear_model
 
 SERUM = "data/Mouse Serum Samples (280 samples)_Protein_Group_Panel.tsv"
 MULTIORGAN = "data/Multiorgan_senescence_and_Olink.xlsx"
@@ -279,7 +272,8 @@ def build_horseshoe_model(train_x, train_y):
     n_measures = train_x.shape[0]
     
     # hyperparameter - expected number of relevant (non-zero) coefficients in sparse model
-    exp_rel = 300
+    #exp_rel = 300
+    exp_rel = 30 # be more aggressive when ruling out coefficients
     
     # hyperparameter - controls how aggressive the sparsity promotion is
     #scale_global = 1
@@ -294,7 +288,7 @@ def build_horseshoe_model(train_x, train_y):
         # prior for noise
         sigma = pm.HalfNormal(
             "sigma",
-            sigma=2.5
+            sigma=0.5 # standardizing inputs and outputs - expect relatively small noise
         )
         
         #global_shrinkage parameter - tau
@@ -332,10 +326,13 @@ def build_horseshoe_model(train_x, train_y):
             beta * global_shrink * local_shrink
         )
         
+        #intercept can be determined mostly by data, no reason to expect zero value
+        icpt = pm.Normal('icpt', mu=0, sigma=5)
+        
         # need expression, though not necessarily `y` assignee
         y = pm.Normal(
             'y',
-            mu=pm.math.dot(x, weights),
+            mu=pm.math.dot(x, weights) + icpt,
             sigma=sigma,
             observed=ydat
         )
@@ -350,5 +347,22 @@ if __name__ == '__main__':
     test_sk_p16, test_sk_p16_x = clear_null_resp(y_tests["SK p16"], x_test)
     model = build_horseshoe_model(train_sk_p16_x, train_sk_p16)
     compiled_model = nutpie.compile_pymc_model(model, backend="jax")
-    trace = nutpie.sample(compiled_model, tune=2_000, draws=6_000)
+    trace = nutpie.sample(compiled_model, tune=2_000, draws=5_000, target_accept=0.9)
+    
+    with model:
+        prior = pm.sample_prior_predictive()
+        trace.extend(prior)
+        ppc = pm.sample_posterior_predictive(trace)
+        trace.extend(ppc)
+        loglike = pm.compute_log_likelihood(trace)
+    
+    with model:
+        pm.set_data({'x': test_sk_p16_x, 'ydata': test_sk_p16})
+        trace.extend(pm.sample_posterior_predictive(trace, predictions=True))
+        
+    
+    _y_true = trace.predictions_constant_data["ydata"].expand_dims({"placehold":1}).values
+    _y_pred = trace.predictions.stack(sample=("chain","draw"))["y"].values.T
+    r2_obj = az.r2_score(_y_true, _y_pred)
+    print("R2 score", round(r2_obj['r2'], 5), "R2 stddev", round(r2_obj['r2_std'], 5))
     
