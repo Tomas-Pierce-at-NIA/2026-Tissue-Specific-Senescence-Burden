@@ -88,7 +88,8 @@ def prune_phase(skel, my_table):
             local_model = build_model(sub_table)
             with local_model:
                 prior = pm.sample_prior_predictive()
-                trace = pm.sample(draws=2_000, nuts_sampler="nutpie", quiet=True)
+                approx = pm.fit(10_000)
+                trace = approx.sample(2_000)
                 postp = pm.sample_posterior_predictive(trace)
             trace.extend(prior)
             trace.extend(postp)

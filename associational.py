@@ -273,7 +273,8 @@ def build_horseshoe_model(train_x, train_y):
     
     # hyperparameter - expected number of relevant (non-zero) coefficients in sparse model
     #exp_rel = 300
-    exp_rel = 30 # be more aggressive when ruling out coefficients
+    #exp_rel = 30 # be more aggressive when ruling out coefficients
+    exp_rel = 3000 # a too strong regularization will drive all coefficients to zero
     
     # hyperparameter - controls how aggressive the sparsity promotion is
     #scale_global = 1
@@ -343,26 +344,34 @@ if __name__ == '__main__':
     targets = collect_targets(table)
     predictors = collect_predictors(table)
     x_train, x_test, y_trains, y_tests = prepare_data(predictors, targets)
-    train_sk_p16, train_sk_p16_x = clear_null_resp(y_trains["SK p16"], x_train)
-    test_sk_p16, test_sk_p16_x = clear_null_resp(y_tests["SK p16"], x_test)
+    train_sk_p16, train_sk_p16_x = clear_null_resp(y_trains["SK p21"], x_train)
+    test_sk_p16, test_sk_p16_x = clear_null_resp(y_tests["SK p21"], x_test)
     model = build_horseshoe_model(train_sk_p16_x, train_sk_p16)
-    compiled_model = nutpie.compile_pymc_model(model, backend="jax")
-    trace = nutpie.sample(compiled_model, tune=2_000, draws=5_000, target_accept=0.9)
+    compiled_model = nutpie.compile_pymc_model(model, backend="jax", gradient_backend="jax")
+    trace = nutpie.sample(compiled_model, tune=2_000, draws=6_000, low_rank_modified_mass_matrix=True)
     
-    with model:
-        prior = pm.sample_prior_predictive()
-        trace.extend(prior)
-        ppc = pm.sample_posterior_predictive(trace)
-        trace.extend(ppc)
-        loglike = pm.compute_log_likelihood(trace)
+    ##  use variational inference because sampling is far too slow with models this big
+    # with model:
+        # prior = pm.sample_prior_predictive()
+        # approx = pm.fit(100_000)
     
-    with model:
-        pm.set_data({'x': test_sk_p16_x, 'ydata': test_sk_p16})
-        trace.extend(pm.sample_posterior_predictive(trace, predictions=True))
-        
+    # vi_trace = approx.sample(2_000)
+    # vi_trace.extend(prior)
     
-    _y_true = trace.predictions_constant_data["ydata"].expand_dims({"placehold":1}).values
-    _y_pred = trace.predictions.stack(sample=("chain","draw"))["y"].values.T
+    # with model:
+        # postpred = pm.sample_posterior_predictive(vi_trace)
+        # vi_trace.extend(postpred)
+        # loglike = pm.compute_log_likelihood(vi_trace)
+    
+    # with model:
+        # pm.set_data({'x': test_sk_p16_x, 'ydata': test_sk_p16})
+        # oos_preds = pm.sample_posterior_predictive(vi_trace, predictions=True)
+    
+    # vi_trace.extend(oos_preds)
+    
+    
+    _y_true = vi_trace.predictions_constant_data["ydata"].expand_dims({"placehold":1}).values
+    _y_pred = vi_trace.predictions.stack(sample=("chain","draw"))["y"].values.T
     r2_obj = az.r2_score(_y_true, _y_pred)
     print("R2 score", round(r2_obj['r2'], 5), "R2 stddev", round(r2_obj['r2_std'], 5))
     
