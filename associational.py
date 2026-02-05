@@ -1,5 +1,5 @@
 
-
+import seaborn as sb
 import nutpie
 import pymc as pm
 import arviz as az
@@ -9,14 +9,16 @@ import numpy as np
 from polars import selectors as cs
 from sklearn import model_selection as model_select
 from sklearn.impute import KNNImputer
+from sklearn import linear_model
+from sklearn import decomposition as decomp
 
 SERUM = "data/Mouse Serum Samples (280 samples)_Protein_Group_Panel.tsv"
-MULTIORGAN = "data/Multiorgan_senescence_and_Olink.xlsx"
+MULTIORGAN = "data/Multiorgan_senescence_and_Olink.csv"
 SAMPLE_DESC = "data/Sample description for Seer.xlsx"
 
 # maximum fraction of nullness we are willing to tolerate
 # before we will not even attempt interpolation / imputation
-NULL_TOL = 0.05
+NULL_TOL = 0.1
 
 def read_sampledesc():
     table = pl.read_excel(
@@ -37,13 +39,19 @@ def read_sampledesc():
       "column_9" : "Strain",
       "column_10": "Age group"
     })
-    return table
+    # we know with confidence that the only nulls in this table
+    # are process controls (helpful experimentally, but irrelevant here)
+    clean = table.drop_nulls()
+    
+    # consistency more than efficiency here
+    return clean.lazy()
+    
 
 # the files are combined this way, not my fault
 def read_multiorgan_olink():
-    table = pl.read_excel(
-         MULTIORGAN,
-         schema_overrides = {
+    table = pl.scan_csv(
+        MULTIORGAN,
+        schema_overrides = {
              "Animal Tag": pl.String,
              "SK p16": pl.Float64,
              "SK p21": pl.Float64,
@@ -58,9 +66,35 @@ def read_multiorgan_olink():
              "OV p21": pl.Float64,
              "OV gH2AX": pl.Float64,
              "Cxcl1": pl.Float64,
-         }
+         },
+         null_values=['FALSE', 'excluded', 'NA', 'no image', 'needs second IHC'],
+         missing_utf8_is_empty_string = False
     )
     return table
+
+# def read_multiorgan_olink():
+    # table = pl.read_excel(
+         # MULTIORGAN,
+         # engine='openpyxl',
+         # schema_overrides = {
+             # "Animal Tag": pl.String,
+             # "SK p16": pl.Float64,
+             # "SK p21": pl.Float64,
+             # "SK gH2AX": pl.Float64,
+             # "LIV p16": pl.Float64,
+             # #"LIV p21": pl.Float64,
+             # "LIV gH2AX": pl.Float64,
+             # "SCO p16": pl.Float64,
+             # "SCO p21": pl.Float64,
+             # "SCO gH2AX": pl.Float64,
+             # "OV p16": pl.Float64,
+             # "OV p21": pl.Float64,
+             # "OV gH2AX": pl.Float64,
+             # "Cxcl1": pl.Float64,
+         # },
+         # read_options = {'whitespace_as_null': True}
+    # )
+    # return table
 
 def read_serum():
     lazy = pl.scan_csv(SERUM,
@@ -75,7 +109,11 @@ def read_serum():
         values=pl.col("Intensity (Log10)"),
         aggregate_function="sum"
     )
-    return pivot
+    # we know that this procedure specifically will implicitly impute zeros (unjustified)
+    # so if we fix that here we don't have to sacrifice real zero-able values to ensure we aren'table
+    # imputing inappropriately
+    dis_imputed = pivot.select(pl.all().replace(old=0.0, new=None))
+    return dis_imputed
 
 def combine(samp_desc, multi_olink, serum):
     combo1 = multi_olink.join(
@@ -83,7 +121,7 @@ def combine(samp_desc, multi_olink, serum):
         on=["Animal Tag", "Age (weeks)"],
         how="inner",
         validate="1:1"
-    ).lazy()
+    )
     table = serum.join(
         combo1,
         on=["Sample Name"],
@@ -121,6 +159,35 @@ def collect_predictors(alldata):
              pl.col("Strain")
     ).collect()
 
+def collect_targets_female(alldata):
+    "special casing because whether ovary collection possible depends on animal sex"
+    femtarget = (alldata
+      .filter(pl.col('Sex').eq('F'))
+      .select(
+        cs.ends_with("p16"),
+        cs.ends_with("p21"),
+        cs.ends_with("gH2AX")
+      )
+    )
+    return femtarget.collect()
+
+
+def collect_predictors_female(alldata):
+    "only female vars relevant for female-only data"
+    femdata = (
+        alldata
+        .filter(pl.col('Sex').eq('F'))
+        .select(
+            cs.exclude(
+                cs.ends_with("p16"),
+                cs.ends_with("p21"),
+                cs.ends_with("gH2AX")
+            )
+        )
+    )
+    return femdata.collect()  
+
+
 class PolarsStandardizer:
     """
     Analog to sckikit-learn's standardizer,
@@ -133,7 +200,7 @@ class PolarsStandardizer:
             cs.numeric().mean()
         )
         self.train_std = train_data.select(
-            cs.numeric().std()
+            cs.numeric().std() + pl.when(cs.numeric().std().eq(0.0)).then(1e-11).otherwise(0.0)
         )
     
     def standardize_numeric(self, data):
@@ -223,31 +290,30 @@ def prepare_data(predictors, targets, rand_seed=731):
     )
     x_train, x_test, y_trains, y_tests = tt_split
     
-    x_standardizer = PolarsStandardizer(x_train)
-    y_standardizer = PolarsStandardizer(y_trains)
+    imputer = KNNImputer().set_output(transform='polars')
+    # want to learn sparse representation of components matrix,
+    # and can only have up to #measures linear independent components
+    nmf = decomp.NMF(n_components=280, alpha_W=0.01, l1_ratio=0.4).set_output(transform='polars')
     
-    stand_x_train = x_standardizer.standardize_numeric(x_train)
-    stand_y_trains = y_standardizer.standardize_numeric(y_trains)
+    x_train_num = x_train.select(cs.numeric())
+    x_train_cat = x_train.select(pl.col('Sex'), pl.col('Strain'))
+    x_train_imputed = imputer.fit_transform(x_train_num)
+    x_train_comps = nmf.fit_transform(x_train_imputed)
+    x_train_decomp = pl.concat([x_train_comps, x_train_cat], how="horizontal")
+    x_standardizer = PolarsStandardizer(x_train_decomp)
+    x_train_std_decomp = x_standardizer.standardize_numeric(x_train_decomp)
+    #x_train_std_decomp_num = x_train_std_decomp.to_dummies(['Sex', 'Strain'])
     
+    x_test_num = x_test.select(cs.numeric())
+    x_test_cat = x_test.select(pl.col('Sex'), pl.col('Strain'))
+    x_test_imputed = imputer.transform(x_test_num)
+    x_test_comps = nmf.transform(x_test_imputed)
+    x_test_decomp = pl.concat([x_test_comps, x_test_cat], how="horizontal")
+    x_test_std_decomp = x_standardizer.standardize_numeric(x_test_decomp)
+    #x_test_std_decomp_num = x_test_std_decomp.to_dummies(['Sex', 'Strain'])
     
-    stand_x_train_numeric = stand_x_train.to_dummies(["Sex", "Strain"])
-    
-    imputer = KNNImputer(keep_empty_features=False)
-    imputed_x_train = imputer.fit_transform(stand_x_train_numeric)
-    
-    stand_x_test = x_standardizer.standardize_numeric(x_test)
-    stand_y_tests = y_standardizer.standardize_numeric(y_tests)
-    
-    stand_x_test_numeric = stand_x_test.to_dummies(["Sex", "Strain"])
-    
-    imputed_x_test = imputer.transform(stand_x_test_numeric)
-    
-    x_colnames = list(imputer.get_feature_names_out(stand_x_train_numeric.columns))
-    
-    prepped_x_train = pl.from_numpy(imputed_x_train, schema=x_colnames)
-    prepped_x_test = pl.from_numpy(imputed_x_test, schema=x_colnames)
-    
-    return prepped_x_train, prepped_x_test, stand_y_trains, stand_y_tests
+    return x_train_std_decomp, x_test_std_decomp, y_trains, y_tests
+
 
 
 def build_horseshoe_model(train_x, train_y):
@@ -271,69 +337,40 @@ def build_horseshoe_model(train_x, train_y):
     D_params = train_x.shape[1]
     n_measures = train_x.shape[0]
     
-    # hyperparameter - expected number of relevant (non-zero) coefficients in sparse model
-    #exp_rel = 300
-    #exp_rel = 30 # be more aggressive when ruling out coefficients
-    exp_rel = 3000 # a too strong regularization will drive all coefficients to zero
+    # wizard shit
+    # control how spread out non-zero coefficients are expected to be
+    scale = 2
+    deg_free = 4
     
-    # hyperparameter - controls how aggressive the sparsity promotion is
-    #scale_global = 1
-    # based on Piironen & Vehtari 2016 recommendation
-    scale_global = exp_rel / ((D_params - exp_rel) * np.sqrt(n_measures))
+    # expected number of relevant variables
+    exp_rel = 3000
     
     
     with pm.Model() as model:
         x = pm.Data("x", train_x)
         ydat = pm.Data("ydata", train_y)
         
-        # prior for noise
-        sigma = pm.HalfNormal(
-            "sigma",
-            sigma=0.5 # standardizing inputs and outputs - expect relatively small noise
-        )
+        sigma = pm.HalfNormal('sigma', sigma=2.5)
         
-        #global_shrinkage parameter - tau
-        global_shrink = pm.HalfCauchy(
-            "global_shrink",
-            beta= scale_global * sigma
-        )
+        #global shrinkage
+        tau_0 = (exp_rel * sigma) / ((D_params - exp_rel) * np.sqrt(n_measures))
+        gbl_shrink = pm.HalfCauchy('global_shrink', beta=tau_0)
         
-        #component of weights in non-centered parameterization
-        beta=pm.Normal("beta",mu=0,tau=1,shape=train_x.shape[1])
+        #local shrinkage
+        c2 = pm.InverseGamma('c2', alpha=deg_free/2, beta=deg_free*(scale**2)/2)
+        lcl_shrink = pm.HalfCauchy('lcl_shrink', beta=1, shape=train_x.shape[1])
+        local_shrink = lcl_shrink * pm.math.sqrt(c2 / (c2 + gbl_shrink**2 * lcl_shrink**2))
         
-        #component of local shrinkage parameter in non-centered parameterization - lambda
-        local_shrink1 = pm.HalfCauchy(
-            "local_shrink1",
-            beta=1,
-            shape=train_x.shape[1]
-        )
+        #coefficient effect component
+        beta = pm.Normal('beta', mu=0, sigma=1, shape=train_x.shape[1])
         
-        # component of local shrinkage in non-centered parameterization
-        c_sq = pm.InverseGamma(
-            "c_sq",
-            alpha=1,
-            beta=1
-        )
-        
-        # complete local shrinkage parameter
-        local_shrink = pm.Deterministic(
-            'local_shrink',
-            local_shrink1 * pm.math.sqrt(c_sq / (c_sq + (global_shrink**2 + local_shrink1**2)))
-        )
-        
-        # regression weights
-        weights = pm.Deterministic(
-            "weights",
-            beta * global_shrink * local_shrink
-        )
-        
-        #intercept can be determined mostly by data, no reason to expect zero value
-        icpt = pm.Normal('icpt', mu=0, sigma=5)
-        
+        #fully constructed weights
+        weights = beta*local_shrink*gbl_shrink
+                
         # need expression, though not necessarily `y` assignee
         y = pm.Normal(
             'y',
-            mu=pm.math.dot(x, weights) + icpt,
+            mu=pm.math.dot(x, weights),
             sigma=sigma,
             observed=ydat
         )
@@ -341,37 +378,74 @@ def build_horseshoe_model(train_x, train_y):
 
 if __name__ == '__main__':
     table = load_alldata()
-    targets = collect_targets(table)
+    targets = collect_targets(table).select(cs.exclude(cs.starts_with("OV")))
     predictors = collect_predictors(table)
+    
+    femtargets = collect_targets_female(table)
+    fempredictors = collect_predictors_female(table)
+    
     x_train, x_test, y_trains, y_tests = prepare_data(predictors, targets)
-    train_sk_p16, train_sk_p16_x = clear_null_resp(y_trains["SK p21"], x_train)
-    test_sk_p16, test_sk_p16_x = clear_null_resp(y_tests["SK p21"], x_test)
-    model = build_horseshoe_model(train_sk_p16_x, train_sk_p16)
-    compiled_model = nutpie.compile_pymc_model(model, backend="jax", gradient_backend="jax")
-    trace = nutpie.sample(compiled_model, tune=2_000, draws=6_000, low_rank_modified_mass_matrix=True)
+    assert False
     
-    ##  use variational inference because sampling is far too slow with models this big
-    # with model:
-        # prior = pm.sample_prior_predictive()
-        # approx = pm.fit(100_000)
+    # display missingness
+    fig, ax = pyplot.subplots(figsize=(12,6))
+    sb.barplot(x=targets.columns, y=targets.null_count().to_numpy()[0,:], ax=ax)
+    pyplot.title("Counts of non-observed tissue senescence markers (280 samples total)")
+    pyplot.show()
     
-    # vi_trace = approx.sample(2_000)
-    # vi_trace.extend(prior)
+    fig, ax = pyplot.subplots(figsize=(12,6))
+    sb.barplot(x=femtargets.columns, y=femtargets.null_count().to_numpy()[0,:], ax=ax)
+    pyplot.title("Counts of non-observed tissue senescence markers for females (144 samples total)")
+    pyplot.show()
     
-    # with model:
-        # postpred = pm.sample_posterior_predictive(vi_trace)
-        # vi_trace.extend(postpred)
-        # loglike = pm.compute_log_likelihood(vi_trace)
+    # show distributions
+    fig, ax = pyplot.subplots(figsize=(12,6))
+    side_targ = targets.unpivot()
+    sb.stripplot(side_targ.drop_nulls(), x="variable", y="value", ax=ax, size=2)
+    sb.boxplot(side_targ.drop_nulls(), x="variable", y="value", ax=ax)
+    pyplot.title("Distribution of observed tissue senescence markers")
+    pyplot.show()
     
-    # with model:
-        # pm.set_data({'x': test_sk_p16_x, 'ydata': test_sk_p16})
-        # oos_preds = pm.sample_posterior_predictive(vi_trace, predictions=True)
+    fig, ax = pyplot.subplots(figsize=(12,6))
+    k = side_targ.select(pl.col('variable'), pl.col('value').log1p())
+    sb.stripplot(k.drop_nulls(), x="variable", y="value", ax=ax, size=2)
+    sb.boxplot(k.drop_nulls(), x="variable", y="value", ax=ax)
+    pyplot.title("Distribution of log1p [ie ln(x + 1)] of tissue senescence markers")
+    pyplot.show()
     
-    # vi_trace.extend(oos_preds)
+    fig, ax = pyplot.subplots(figsize=(12,6))
+    side_fem = femtargets.unpivot()
+    sb.stripplot(side_fem.drop_nulls(), x="variable", y="value", ax=ax, size=2)
+    sb.boxplot(side_fem.drop_nulls(), x="variable", y="value", ax=ax)
+    pyplot.title("Distribution of observed tissue senescence markers for females")
+    pyplot.show()
+    
+    fig, ax = pyplot.subplots(figsize=(12,6))
+    k2 = side_fem.select(pl.col('variable'), pl.col('value').log1p())
+    sb.stripplot(k2.drop_nulls(), x="variable", y="value", ax=ax, size=2)
+    sb.boxplot(k2.drop_nulls(), x="variable", y="value", ax=ax)
+    pyplot.title("Distribution of log1p [ie ln(x + 1)] of tissue senescence markers for females")
+    pyplot.show()
+    #targets = targets.select(pl.all().log10())
+    
+    #predictors = predictors.select(pl.all().log10())
+    #assert False
+    # x_train, x_test, y_trains, y_tests = prepare_data(predictors, targets)
+    
+    # for pred_name in targets.columns:
+        # train_y2, train_x2 = clear_null_resp(y_trains[pred_name], x_train)
+        # test_y2, test_x2 = clear_null_resp(y_tests[pred_name], x_test)
+        # enet = linear_model.ElasticNetCV(l1_ratio=[0.1, 0.2, 0.5, 0.8, 0.9, 0.95, 0.99], alphas=30, max_iter=50_000, fit_intercept=True)     
+        # enet.fit(train_x2, train_y2)
+        # r2 = enet.score(test_x2, test_y2)
+        # print(r2, pred_name)
+        
+    # #train_sk_p16, train_sk_p16_x = clear_null_resp(y_trains["SK p21"], x_train)
+    # #test_sk_p16, test_sk_p16_x = clear_null_resp(y_tests["SK p21"], x_test)
+    # assert False
+    # model = build_horseshoe_model(train_sk_p16_x, train_sk_p16)
+    # compiled_model = nutpie.compile_pymc_model(model, backend="jax", gradient_backend="pytensor")
+    # trace = nutpie.sample(compiled_model, tune=2_000, draws=6_000, target_accept=0.9)
     
     
-    _y_true = vi_trace.predictions_constant_data["ydata"].expand_dims({"placehold":1}).values
-    _y_pred = vi_trace.predictions.stack(sample=("chain","draw"))["y"].values.T
-    r2_obj = az.r2_score(_y_true, _y_pred)
-    print("R2 score", round(r2_obj['r2'], 5), "R2 stddev", round(r2_obj['r2_std'], 5))
     
