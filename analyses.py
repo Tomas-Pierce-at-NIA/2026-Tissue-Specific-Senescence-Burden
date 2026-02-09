@@ -9,6 +9,7 @@ from sklearn import preprocessing
 from sklearn.impute import KNNImputer
 
 from sklearn.linear_model import ElasticNetCV
+from sklearn import cross_decomposition
 from sklearn import metrics
 
 VIEW = False
@@ -23,9 +24,9 @@ class DataProcessor:
         #self.decomp = decomposition.MiniBatchSparsePCA(n_components=max_components,n_jobs=-1)
         self.decomp = decomposition.MiniBatchNMF(n_components=max_components,
                                                  init='nndsvd',
-                                                 alpha_W=0.1,
+                                                 alpha_W=0.01,
                                                  l1_ratio=0.2,
-                                                 max_iter=1000,
+                                                 max_iter=10_000,
                                                  forget_factor=1,
                                                  batch_size=32)
         self.decomp.set_output(transform='polars')
@@ -83,9 +84,15 @@ if __name__ == '__main__':
         #pyplot.hist(y_tests['OV p16'].log10())
         #pyplot.title("Distribution of Log10 Ovary p16 (test set)")
         #pyplot.show()
+    
+    y_train2, x_train2 = clear_null_resp(y_trains['SK p16'], x_train)
+    y_test2, x_test2 = clear_null_resp(y_tests['SK p16'], x_test)
     data_proc = DataProcessor(100)
-    x_train2 = prepare_xdata(x_train, data_proc, is_train=True)
-    x_test2 = prepare_xdata(x_test, data_proc, is_train=False)
-    y_train_skp16, x_train_skp16 = clear_null_resp(y_trains['SK p16'], x_train2)
-    y_test_skp16, x_test_skp16 = clear_null_resp(y_tests['SK p16'], x_test2)
+    x_train3 = prepare_xdata(x_train2, data_proc, is_train=True)
+    x_test3 = prepare_xdata(x_test2, data_proc, is_train=False)
+    
+    #x_train2 = prepare_xdata(x_train, data_proc, is_train=True)
+    #x_test2 = prepare_xdata(x_test, data_proc, is_train=False)
+    #y_train_skp16, x_train_skp16 = clear_null_resp(y_trains['SK p16'], x_train2)
+    #y_test_skp16, x_test_skp16 = clear_null_resp(y_tests['SK p16'], x_test2)
     
