@@ -11,6 +11,7 @@ SAMPLE_DESC = "data/Sample description for Seer.xlsx"
 TOL = 0.1
 TEST_FRAC = 0.2
 
+
 def read_sampledesc():
     """Reads file describing samples, needed to connect serum samples to tissue measurements"""
     table = pl.read_excel(
@@ -85,6 +86,7 @@ def read_serum():
     # so if we fix that here we don't have to sacrifice real zero-able values to ensure we aren'table
     # imputing inappropriately
     dis_imputed = pivot.select(pl.all().replace(old=0.0, new=None))
+    
     return dis_imputed
 
 
@@ -198,4 +200,22 @@ def prepare_datasets(fem_only=False, rng_seed=334):
     y_trains = y_trains.select(pl.exclude("index"))
     y_tests = y_tests.select(pl.exclude("index"))
     return x_train.collect(), x_test.collect(), y_trains.collect(), y_tests.collect()
+
+
+def clear_null_response(target, predictors):
+    """
+    get rid of rows where the target is null
+    because the tools aren't set up to deal with that
+    """
+    valid_mask = ~target.is_null()
+    valid_target = target.filter(valid_mask)
+    corresp_predictors = predictors.filter(valid_mask)
+    return valid_target, corresp_predictors
+
+
+def numerize_predictors(predictors):
+    selected = predictors.select(cs.numeric(), pl.col('Sex'), pl.col('Strain'))
+    dummied = selected.to_dummies(['Sex', 'Strain'])
+    no_cat_colinear = dummied.select(pl.exclude(['Sex_M', 'Strain_HET3']))
+    return no_cat_colinear
 
