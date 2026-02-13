@@ -20,6 +20,11 @@ from sklearn import preprocessing as pre
 
 import pymc as pm
 import nutpie
+import arviz as az
+
+from matplotlib import pyplot
+from sklearn import metrics
+
 
 class DataLoader:
     
@@ -60,6 +65,7 @@ class DataLoader:
     
     def get_test_predictors(self):
         predictors = data.get_predictors(self.__test_data)
+        predictors = predictors.select(pl.exclude("index"))
         return predictors.collect()
     
     def get_train_target(self, target_name):
@@ -179,55 +185,123 @@ class ClusterDecompositionSparsePCA(ClusterTransform):
         return self.transform(dtable)
 
 
-dl = DataLoader()
-train_x = dl.get_train_predictors()
-simple_imputer = KNNImputer()
-#simple_imputer = SimpleImputer(strategy="median")
-simple_imputer.set_output(transform='polars')
-train_x2 = simple_imputer.fit_transform(train_x)
-rep_selector = SelectClusterRep(512)
-train_x3 = rep_selector.fit_transform(train_x2.select(pl.exclude("is_F", "is_B6", "Age (weeks)")))
-train_x3 = pl.concat([train_x3, train_x2.select(pl.col('Age (weeks)'))],
-                     how='horizontal'
-                    )
-std = pre.StandardScaler().set_output(transform='polars')
-train_x4 = std.fit_transform(train_x3)
-train_x4 = pl.concat([train_x4, train_x2.select(pl.col("is_F"), pl.col("is_B6"))], how='horizontal')
-train_y = dl.get_train_target('SK p21')
-train_y2, train_x5 = data.clear_null_response(train_y, train_x4)
+def build_model(train_x, train_y, exp_rel, deg_free=3, scale=5):
+    """builds modified hierarchical horseshoe prior regression using input
+    training data.
+    train_x - training predictors
+    train_y - training target
+    exp_rel - number of initially expected relevant predictors
+    
+    following control expected distribution(s) of non-shrunk predictors
+    deg_free - degrees of freedom 
+    scale - scale parameter
+    
+    number of training examples and number of training predictors inferred from train_x
+    
+    constraint:
+    exp_rel must be strictly less than number of predictor columns in train_x
+    
+    Inspirations
+    https://mellorjc.github.io/HorseshoePriorswithpymc3.html
+    https://arxiv.org/abs/1610.05559
+    https://austinrochford.com/posts/2021-05-29-horseshoe-pymc3.html#fn2
+    https://projecteuclid.org/journalArticle/Download?urlId=10.1214%2F17-EJS1337SI
+    https://github.com/to-mi/stan-survival-shrinkage
+    """
+    
+    train_n, d_params = train_x.shape
+    
+    # smallest degrees of freedom that consistently converges
+    # during sampling
+    global_df = 3
+    local_df = 3
+    
+    with pm.Model() as model:
+        x = pm.Data('x', train_x)
+        ydata = pm.Data('ydata', train_y)
+        
+        sigma = pm.HalfNormal('sigma', sigma=2.5)
+        
+        tau0 = (exp_rel * sigma) / ((d_params - exp_rel)*np.sqrt(train_n))
+        global_shrink = pm.HalfStudentT('global_shrink',nu=global_df,sigma=tau0)
+        
+        c2 = pm.InverseGamma('c2', alpha=deg_free/2, beta=deg_free*(scale**2)/2)
+        lcl_shrink = pm.HalfStudentT('lcl_shrink',nu=local_df,sigma=1,shape=d_params)
+        local_shrink = lcl_shrink * pm.math.sqrt(c2 / (c2 + (global_shrink**2)*(lcl_shrink**2)))
+        
+        beta = pm.Normal('beta', mu=0, sigma=1, shape=d_params)
+        weights = pm.Deterministic('weights', beta * local_shrink * global_shrink)
+        
+        icpt = pm.Normal('icpt', mu=0, sigma=10)
+        
+        y=pm.Normal('y', mu=pm.math.dot(x, weights) + icpt, sigma=sigma, observed=ydata)
+        
+    return model
 
-d_params = train_x5.shape[1]
-exp_rel = 200
-train_n = train_x5.shape[0]
 
-deg_free = 3
-scale = 5
 
-with pm.Model() as model:
-    sigma = pm.HalfNormal('sigma', sigma=2.5)
-    tau0 = (exp_rel * sigma) / ((d_params - exp_rel)*np.sqrt(train_n))
-    
-    gbl_shrink = pm.HalfStudentT('global_shrink', nu=3, sigma=tau0)
-    
-    c2 = pm.InverseGamma('c2', alpha=deg_free/2, beta=deg_free*(scale**2)/2)
-    lcl_shrink = pm.HalfStudentT('lcl_shrink', nu=3, sigma=1, shape=d_params)
-    local_shrink = lcl_shrink * pm.math.sqrt(c2 / (c2 + (gbl_shrink**2)*(lcl_shrink**2)))
-    
-    beta = pm.Normal('beta', mu=0, sigma=1, shape=d_params)
-    
-    weights = pm.Deterministic('weights', beta * local_shrink * gbl_shrink)
-    
-    x = pm.Data('x', train_x5)
-    ydata = pm.Data('ydata', train_y2.log10())
-    
-    icpt = pm.Normal('icpt', mu=0, sigma=10)
-    
-    y = pm.Normal('y', 
-                  mu = pm.math.dot(x, weights) + icpt,
-                  sigma=sigma,
-                  observed=ydata
-                 )
+if __name__ == '__main__':
+    dl = DataLoader()
+    train_x = dl.get_train_predictors()
+    #simple_imputer = KNNImputer()
+    simple_imputer = SimpleImputer(strategy="median")
 
-compiled_model = nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')
-trace = nutpie.sample(compiled_model, target_accept=0.99)
+    simple_imputer.set_output(transform='polars')
+    train_x2 = simple_imputer.fit_transform(train_x)
+    rep_selector = SelectClusterRep(512)
+    train_x3 = rep_selector.fit_transform(train_x2.select(pl.exclude("is_F", "is_B6", "Age (weeks)")))
+    train_x3 = pl.concat([train_x3, train_x2.select(pl.col('Age (weeks)'))],
+                         how='horizontal'
+                        )
+    std = pre.StandardScaler().set_output(transform='polars')
+    train_x4 = std.fit_transform(train_x3)
+    train_x4 = pl.concat([train_x4, train_x2.select(pl.col("is_F"), pl.col("is_B6"))], how='horizontal')
+    train_y = dl.get_train_target('SK gH2AX')
+    train_y2, train_x5 = data.clear_null_response(train_y, train_x4)
+
+
+    test_x = dl.get_test_predictors()
+    test_x2 = simple_imputer.transform(test_x)
+    test_x3 = rep_selector.transform(test_x2.select(pl.exclude("is_F", "is_B6", "Age (weeks)")))
+    test_x3 = pl.concat([test_x3, test_x2.select(pl.col('Age (weeks)'))], how='horizontal')
+    test_x4 = std.transform(test_x3)
+    test_x4 = pl.concat([test_x4, test_x2.select(pl.col("is_F"), pl.col("is_B6"))], how="horizontal")
+    test_y = dl.get_test_target("SK gH2AX")
+    test_y2, test_x5 = data.clear_null_response(test_y, test_x4)
+
+    model = build_model(train_x5, train_y2, 500)
+    compiled_model = nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')
+    #adapting_model = compiled_model.with_transform_adapt()
+    trace = nutpie.sample(compiled_model, target_accept=0.99, tune=1000, draws=1000, chains=6, cores=6)
+    
+    g = model.to_graphviz()
+    g.render("modelskel.gv.s", directory="bayes_figs")
+
+    with model:
+        prior = pm.sample_prior_predictive()
+        trace.extend(prior)
+        ppc = pm.sample_posterior_predictive(trace)
+        trace.extend(ppc)
+        ll = pm.compute_log_likelihood(trace)
+        trace.extend(ll)
+
+    with model:
+        pm.set_data({'x': test_x5, 'ydata': test_y2})
+        oos = pm.sample_posterior_predictive(trace, predictions=True)
+        trace.extend(oos)
+    
+    r2 = az.r2_score(y_true=trace.predictions_constant_data['ydata'].values,
+                y_pred=trace.predictions.stack(sample=('chain','draw'))['y'].values.T
+                )
+    
+    print(r2)
+    
+    az.plot_loo_pit(trace, 'y')
+    pyplot.show()
+    
+    ax = az.plot_ppc(trace)
+    ax.legend(loc='upper right')
+    pyplot.show()
+    
+    
 
