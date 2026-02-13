@@ -269,7 +269,7 @@ if __name__ == '__main__':
     test_y = dl.get_test_target("SK gH2AX")
     test_y2, test_x5 = data.clear_null_response(test_y, test_x4)
 
-    model = build_model(train_x5, train_y2, 500)
+    model = build_model(train_x5, train_y2, 256)
     compiled_model = nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')
     #adapting_model = compiled_model.with_transform_adapt()
     trace = nutpie.sample(compiled_model, target_accept=0.99, tune=1000, draws=1000, chains=6, cores=6)
@@ -303,5 +303,14 @@ if __name__ == '__main__':
     ax.legend(loc='upper right')
     pyplot.show()
     
+    wsum = az.summary(trace, var_names=['weights'])
+    wsum = pl.from_pandas(wsum).with_row_index()
+    
+    bayes_factors = []
+    for idx in wsum['index']:
+        bf_dict = az.bayes_factor(trace.isel(weights_dim_0=idx), 'weights', 0.0)
+        bf = bf_dict['BF10']
+        bayes_factors.append(bf)
+    wsum = wsum.with_columns(pl.Series("BayesFactor10", bayes_factors))
     
 
