@@ -24,6 +24,8 @@ import arviz as az
 
 from matplotlib import pyplot
 from sklearn import metrics
+from matplotlib import patches
+from matplotlib import lines as mlines
 
 
 class DataLoader:
@@ -268,8 +270,10 @@ if __name__ == '__main__':
     test_x4 = pl.concat([test_x4, test_x2.select(pl.col("is_F"), pl.col("is_B6"))], how="horizontal")
     test_y = dl.get_test_target("SK gH2AX")
     test_y2, test_x5 = data.clear_null_response(test_y, test_x4)
-
-    model = build_model(train_x5, train_y2, 256)
+    
+    # 262 genes identified as senescence-associated by literature data-mining
+    # https://pmc.ncbi.nlm.nih.gov/articles/PMC3273898/
+    model = build_model(train_x5, train_y2, 262)
     compiled_model = nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')
     #adapting_model = compiled_model.with_transform_adapt()
     trace = nutpie.sample(compiled_model, target_accept=0.99, tune=1000, draws=1000, chains=6, cores=6)
@@ -312,5 +316,71 @@ if __name__ == '__main__':
         bf = bf_dict['BF10']
         bayes_factors.append(bf)
     wsum = wsum.with_columns(pl.Series("BayesFactor10", bayes_factors))
+    names = pl.Series("PredictorName", train_x5.columns)
+    wsum = wsum.with_columns(names)
     
-
+    #hue = wsum.select((pl.col('mean').lt(0) & pl.col('BayesFactor10').gt(1))
+    wsum_plot = wsum.with_columns(
+        pl.when(pl.col('mean').lt(0) & pl.col('BayesFactor10').gt(10))
+        .then(pl.lit(-1))
+        .otherwise(
+            pl.when(pl.col('mean').gt(0) & pl.col('BayesFactor10').gt(10))
+            .then(pl.lit(+1))
+            .otherwise(
+                pl.when(pl.col('mean').lt(0) & pl.col('BayesFactor10').lt(10))
+                .then(pl.lit(-0.1))
+                .otherwise(
+                    pl.when(pl.col('mean').gt(0) & pl.col('BayesFactor10').lt(10))
+                    .then(pl.lit(0.1))
+                    .otherwise(pl.lit(0.0))
+                )
+            )
+        ).alias("association_cat")
+    )
+    
+    top10 = wsum_plot.filter(pl.col('BayesFactor10').log10().gt(1)).sort(pl.col('mean')).tail(10)
+    bottom10 = wsum_plot.filter(pl.col('BayesFactor10').log10().gt(1)).sort(pl.col('mean')).head(10)
+    
+    pyplot.scatter(x=wsum['mean'], 
+                   y=wsum['BayesFactor10'].log10(), 
+                   marker='+', 
+                   # easier to fix here
+                   c=wsum_plot['association_cat'],
+                   cmap="coolwarm")
+                   
+    for i in range(10):
+        top_x, top_ye, top_lbl = top10[i, ['mean', 'BayesFactor10', 'PredictorName']].row()
+        top_y = np.log10(top_ye)
+        pyplot.text(top_x, top_y, top_lbl)
+        
+        bottom_x, bottom_ye, bottom_lbl = bottom10[i, ['mean', 'BayesFactor10', 'PredictorName']].row()
+        bottom_y = np.log10(bottom_ye)
+        pyplot.text(bottom_x, bottom_y, bottom_lbl)
+    #pyplot.legend()
+    cmap = pyplot.get_cmap('coolwarm')
+    #colors = cmap([1.0, 0.1, 0.0, -0.1, -1.0])
+    # manually redo color normalization for legend
+    colors = cmap([0.0, 0.45, 0.5, 0.55,  1.0])
+    minus1 = mlines.Line2D([], [], linestyle='', marker='+', color=colors[0], label='negative\nassociation')
+    minus01 = mlines.Line2D([], [], linestyle='', marker='+', color=colors[1], label='limited\nevidence')
+    plus01 = mlines.Line2D([], [], linestyle='', marker='+', color=colors[3], label='limited\nevidence')
+    plus1 = mlines.Line2D([], [], linestyle='', marker='+', color=colors[4], label='positive\nassociation')
+    pyplot.legend(handles=[minus1, minus01, plus01, plus1], loc='lower left')
+    
+    left, right = pyplot.xlim()
+    max_mag = max(abs(left), abs(right))
+    pyplot.xlim(-max_mag, max_mag)
+    pyplot.xlabel("Posterior Coefficient Mean")
+    pyplot.ylabel("log10(Bayes Factor)")
+    pyplot.axhline(y=0.5, linestyle='--', color='purple')
+    pyplot.axhline(y=1.0, linestyle='--', color='purple')
+    pyplot.axhline(y=1.5, linestyle='--', color='purple')
+    pyplot.axhline(y=2.0, linestyle='--', color='purple')
+    
+    pyplot.text(x=2.5, y=0.25, s="Anecdotal\nEvidence", color='purple')
+    pyplot.text(x=2.5, y=0.75, s="Moderate\nEvidence", color="purple")
+    pyplot.text(x=2.5, y=1.25, s="Strong\nEvidence", color="purple")
+    pyplot.text(x=2.5, y=1.75, s="Very Strong\nEvidence", color="purple")
+    pyplot.text(x=2.5, y=2.25, s="Decisive\nEvidence", color="purple")
+    
+    pyplot.show()
