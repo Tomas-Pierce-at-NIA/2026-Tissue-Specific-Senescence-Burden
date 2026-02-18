@@ -67,6 +67,16 @@ def read_multiorgan_olink():
     return table
 
 
+def gene_lookup_by_name():
+    """use the serum file to produce a lookup table to translate between protein names
+    and gene names.
+    """
+    lazy = pl.scan_csv(SERUM, separator='\t')
+    lookup = lazy.select(pl.col('Protein Names'), pl.col('Gene Names'))
+    dedup = lookup.unique()
+    return dedup
+
+
 def read_serum():
     """Reads file with serum proteomics measurements, converts format to be 
     column per protein and ensures that in-appropriate zero imputations are removed."""
@@ -74,10 +84,12 @@ def read_serum():
                        separator="\t"
                        )
     prot_list = lazy.select(pl.col("Protein Names").unique()).collect()["Protein Names"]
-    
+    #gene_list = lazy.select(pl.col("Gene Names").unique()).collect()["Gene Names"]
     pivot = lazy.pivot(
         on=pl.col("Protein Names"),
+        #on=pl.col("Gene Names"),
         on_columns=prot_list,
+        #on_columns=gene_list,
         index=pl.col("Sample Name"),
         values=pl.col("Intensity (Log10)"),
         aggregate_function="sum"

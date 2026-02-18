@@ -35,7 +35,7 @@ class DataLoader:
     RNG_STATE = 346
     TEST_FRAC = 0.2
     
-    def __init__(self):
+    def __init__(self, rng_state=None):
         samp_desc = data.read_sampledesc()
         multiorg_olink = data.read_multiorgan_olink()
         multiorg_olink = data.clear_excess_nullcols(multiorg_olink, self.ORGAN_NULL_TOL)
@@ -50,7 +50,9 @@ class DataLoader:
         
         n = dataset.select(pl.len()).collect().item()
         empty = np.zeros((n, 1))
-        splitter = ShuffleSplit(test_size=self.TEST_FRAC, random_state=self.RNG_STATE)
+        if rng_state is None:
+            rng_state = self.RNG_STATE
+        splitter = ShuffleSplit(test_size=self.TEST_FRAC, random_state=rng_state)
         train_idx, test_idx = next(splitter.split(empty))
         
         train_data = data.get_subset_indices(dataset, train_idx)
@@ -338,8 +340,12 @@ if __name__ == '__main__':
         ).alias("association_cat")
     )
     
-    top10 = wsum_plot.filter(pl.col('BayesFactor10').log10().gt(1)).sort(pl.col('mean')).tail(10)
-    bottom10 = wsum_plot.filter(pl.col('BayesFactor10').log10().gt(1)).sort(pl.col('mean')).head(10)
+    top = wsum_plot.filter(pl.col('BayesFactor10').log10().gt(1)).sort(pl.col('mean')).tail(7)
+    bottom = wsum_plot.filter(pl.col('BayesFactor10').log10().gt(1)).sort(pl.col('mean')).head(5)
+    
+    lookup = data.gene_lookup_by_name().collect()
+    top = top.join(lookup, left_on='PredictorName', right_on='Protein Names', how='left')
+    bottom = bottom.join(lookup, left_on='PredictorName', right_on='Protein Names', how='left')
     
     pyplot.scatter(x=wsum['mean'], 
                    y=wsum['BayesFactor10'].log10(), 
@@ -347,15 +353,26 @@ if __name__ == '__main__':
                    # easier to fix here
                    c=wsum_plot['association_cat'],
                    cmap="coolwarm")
-                   
-    for i in range(10):
-        top_x, top_ye, top_lbl = top10[i, ['mean', 'BayesFactor10', 'PredictorName']].row()
+      
+    for i in range(len(top)):
+        top_x, top_ye, top_lbl, top_gene = top[i, ['mean', 'BayesFactor10', 'PredictorName', 'Gene Names']].row()
         top_y = np.log10(top_ye)
-        pyplot.text(top_x, top_y, top_lbl)
+        if top_gene is not None:
+            top_lbl = top_gene.split(';')[0]
+        #top_lbl = top_lbl.split(';')[0]
+        pyplot.text(top_x + 0.01, top_y + 0.01, top_lbl)
         
-        bottom_x, bottom_ye, bottom_lbl = bottom10[i, ['mean', 'BayesFactor10', 'PredictorName']].row()
+    for i in range(len(bottom)):
+        bottom_x, bottom_ye, bottom_lbl, bottom_gene = bottom[i, ['mean', 'BayesFactor10', 'PredictorName', 'Gene Names']].row()
         bottom_y = np.log10(bottom_ye)
-        pyplot.text(bottom_x, bottom_y, bottom_lbl)
+        if bottom_gene is not None:
+            bottom_lbl = bottom_gene.split(';')[0]
+        #bottom_lbl = bottom_lbl.split(';')[0]
+        kwargs = {'ha':'right'}# if len(bottom_lbl) >= 6 else {'ha':'left'}
+        kwargs['va'] = 'top'
+        pyplot.text(bottom_x - 0.01, bottom_y - 0.01, bottom_lbl, **kwargs)
+        ha_idx += 1
+        va_idx+=1
     #pyplot.legend()
     cmap = pyplot.get_cmap('coolwarm')
     #colors = cmap([1.0, 0.1, 0.0, -0.1, -1.0])
@@ -370,6 +387,7 @@ if __name__ == '__main__':
     left, right = pyplot.xlim()
     max_mag = max(abs(left), abs(right))
     pyplot.xlim(-max_mag, max_mag)
+    pyplot.ylim(0.0, 2.5)
     pyplot.xlabel("Posterior Coefficient Mean")
     pyplot.ylabel("log10(Bayes Factor)")
     pyplot.axhline(y=0.5, linestyle='--', color='purple')
@@ -377,10 +395,12 @@ if __name__ == '__main__':
     pyplot.axhline(y=1.5, linestyle='--', color='purple')
     pyplot.axhline(y=2.0, linestyle='--', color='purple')
     
-    pyplot.text(x=2.5, y=0.25, s="Anecdotal\nEvidence", color='purple')
-    pyplot.text(x=2.5, y=0.75, s="Moderate\nEvidence", color="purple")
-    pyplot.text(x=2.5, y=1.25, s="Strong\nEvidence", color="purple")
-    pyplot.text(x=2.5, y=1.75, s="Very Strong\nEvidence", color="purple")
-    pyplot.text(x=2.5, y=2.25, s="Decisive\nEvidence", color="purple")
+    pyplot.text(x=2.0, y=0.25, s="Anecdotal\nEvidence", color='purple')
+    pyplot.text(x=2.0, y=0.75, s="Moderate\nEvidence", color="purple")
+    pyplot.text(x=2.0, y=1.25, s="Strong\nEvidence", color="purple")
+    pyplot.text(x=2.0, y=1.75, s="Very Strong\nEvidence", color="purple")
+    pyplot.text(x=2.0, y=2.25, s="Decisive\nEvidence", color="purple")
+    
+    pyplot.title("Skin γH2AX predictor associations")
     
     pyplot.show()
