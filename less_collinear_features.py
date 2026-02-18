@@ -243,33 +243,47 @@ def build_model(train_x, train_y, exp_rel, deg_free=3, scale=5):
     return model
 
 
+class DataPrep:
+    
+    def __init__(self, n_clust):
+        self.imputer = SimpleImputer(strategy='median').set_output(transform='polars')
+        self.clust_rep = SelectClusterRep(n_clust)
+        self.std_ize = pre.StandardScaler().set_output(transform='polars')
+    
+    def fit_transform(self, data):
+        data1 = self.imputer.fit_transform(data)
+        notspecial = data1.select(pl.exclude("is_F", "is_B6", "Age (weeks)"))
+        data2 = self.clust_rep.fit_transform(notspecial)
+        data3 = pl.concat([data2, data1.select(pl.col('Age (weeks)'))], how='horizontal')
+        data4 = self.std_ize.fit_transform(data3)
+        data5 = pl.concat([data4, data1.select(pl.col('is_F'), pl.col('is_B6'))], how='horizontal')
+        return data5
+    
+    def transform(self, data):
+        data1 = self.imputer.transform(data)
+        notspecial = data1.select(pl.exclude("is_F", "is_B6", "Age (weeks)"))
+        data2 = self.clust_rep.transform(notspecial)
+        data3 = pl.concat([data2, data1.select(pl.col('Age (weeks)'))], how='horizontal')
+        data4 = self.std_ize.transform(data3)
+        data5 = pl.concat([data4, data1.select(pl.col('is_F'), pl.col('is_B6'))], how='horizontal')
+        return data5
+
 
 if __name__ == '__main__':
     dl = DataLoader()
     train_x = dl.get_train_predictors()
-    #simple_imputer = KNNImputer()
-    simple_imputer = SimpleImputer(strategy="median")
-
-    simple_imputer.set_output(transform='polars')
-    train_x2 = simple_imputer.fit_transform(train_x)
-    rep_selector = SelectClusterRep(512)
-    train_x3 = rep_selector.fit_transform(train_x2.select(pl.exclude("is_F", "is_B6", "Age (weeks)")))
-    train_x3 = pl.concat([train_x3, train_x2.select(pl.col('Age (weeks)'))],
-                         how='horizontal'
-                        )
-    std = pre.StandardScaler().set_output(transform='polars')
-    train_x4 = std.fit_transform(train_x3)
-    train_x4 = pl.concat([train_x4, train_x2.select(pl.col("is_F"), pl.col("is_B6"))], how='horizontal')
+    
+    data_prep = DataPrep(512)
+    train_x4 = data_prep.fit_transform(train_x)
+    
     train_y = dl.get_train_target('SK gH2AX')
     train_y2, train_x5 = data.clear_null_response(train_y, train_x4)
 
 
     test_x = dl.get_test_predictors()
-    test_x2 = simple_imputer.transform(test_x)
-    test_x3 = rep_selector.transform(test_x2.select(pl.exclude("is_F", "is_B6", "Age (weeks)")))
-    test_x3 = pl.concat([test_x3, test_x2.select(pl.col('Age (weeks)'))], how='horizontal')
-    test_x4 = std.transform(test_x3)
-    test_x4 = pl.concat([test_x4, test_x2.select(pl.col("is_F"), pl.col("is_B6"))], how="horizontal")
+
+    test_x4 = data_prep.transform(test_x)
+    
     test_y = dl.get_test_target("SK gH2AX")
     test_y2, test_x5 = data.clear_null_response(test_y, test_x4)
     
@@ -278,7 +292,8 @@ if __name__ == '__main__':
     model = build_model(train_x5, train_y2, 262)
     compiled_model = nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')
     #adapting_model = compiled_model.with_transform_adapt()
-    trace = nutpie.sample(compiled_model, target_accept=0.99, tune=1000, draws=1000, chains=6, cores=6)
+    #need more stability - more sampling than normal
+    trace = nutpie.sample(compiled_model, target_accept=0.99, tune=1000, draws=6000, chains=6, cores=6)
     
     g = model.to_graphviz()
     g.render("modelskel.gv.s", directory="bayes_figs")
@@ -320,6 +335,8 @@ if __name__ == '__main__':
     wsum = wsum.with_columns(pl.Series("BayesFactor10", bayes_factors))
     names = pl.Series("PredictorName", train_x5.columns)
     wsum = wsum.with_columns(names)
+    
+    wsum.write_csv("bayes_figs/coefficients_table.csv")
     
     #hue = wsum.select((pl.col('mean').lt(0) & pl.col('BayesFactor10').gt(1))
     wsum_plot = wsum.with_columns(
@@ -371,8 +388,6 @@ if __name__ == '__main__':
         kwargs = {'ha':'right'}# if len(bottom_lbl) >= 6 else {'ha':'left'}
         kwargs['va'] = 'top'
         pyplot.text(bottom_x - 0.01, bottom_y - 0.01, bottom_lbl, **kwargs)
-        ha_idx += 1
-        va_idx+=1
     #pyplot.legend()
     cmap = pyplot.get_cmap('coolwarm')
     #colors = cmap([1.0, 0.1, 0.0, -0.1, -1.0])
