@@ -5,6 +5,8 @@ import numpy as np
 from sklearn import impute, linear_model, preprocessing
 import polars as pl
 from polars import selectors as cs
+from matplotlib import pyplot
+import seaborn as sb
 
 def numerize(df):
     return df.select(cs.numeric(), pl.col('Sex').eq('F').alias('is_F'), pl.col('Strain').eq('B6').alias('is_B6'))
@@ -56,7 +58,7 @@ def evaluate_enets():
                     x_train = x_train.select(pl.exclude("Age (weeks)"))
                     x_test = x_test.select(pl.exclude("Age (weeks)"))
                 for cname in y_trains.columns:
-                    if "OV" in cname and not fem_only:
+                    if "OV" in cname and not rule:
                         # no point trying to fit ovary models unless only using female data
                         continue
                     print("{} {} {}".format(seed, rule, cname))
@@ -76,9 +78,9 @@ def evaluate_enets():
                     xtrain4 = imputer.fit_transform(xtrain3)
                     xtest4 = imputer.transform(xtest3)
                     
-                    clust_rep = less_collinear_features.SelectClusterRep(512)
-                    xtrain4 = clust_rep_nonspecial(xtrain4, clust_rep, fit=True)
-                    xtest4 = clust_rep_nonspecial(xtest4, clust_rep, fit=False)
+                    #clust_rep = less_collinear_features.SelectClusterRep(512)
+                    #xtrain4 = clust_rep_nonspecial(xtrain4, clust_rep, fit=True)
+                    #xtest4 = clust_rep_nonspecial(xtest4, clust_rep, fit=False)
                     
                     std_izer = preprocessing.StandardScaler().set_output(transform='polars')
                     xtrain5 = standardize_noncat(xtrain4, std_izer, fit=True)
@@ -128,4 +130,40 @@ def evaluate_enets():
 
 if __name__ == '__main__':
     table = evaluate_enets()
+    
+    sb.boxplot(table.filter(pl.col('transform').eq('log') & pl.col('female_only').eq(False)),
+               x='target',
+               y='score',
+               hue='includes_age'
+              )
+    pyplot.suptitle("variance from randomizing train-test split")
+    pyplot.title("elastic net log-linear model R2 scores out-of-sample (both sexes)")
+    pyplot.show()
+    
+    sb.boxplot(table.filter(pl.col('transform').eq('log') & pl.col('female_only').eq(True)),
+               x='target',
+               y='score',
+               hue='includes_age'
+              )
+    pyplot.suptitle("variance from randomizing train-test split")
+    pyplot.title("elastic net log-linear model R2 scores out-of-sample (females only)")
+    pyplot.show()
+    
+    sb.boxplot(table.filter(pl.col('transform').eq('ident') & pl.col('female_only').eq(False)),
+               x='target',
+               y='score',
+               hue='includes_age'
+              )
+    pyplot.suptitle("variance from randomizing train-test split")
+    pyplot.title("elastic net linear model R2 scores out of sample (both sexes)")
+    pyplot.show()
+    
+    sb.boxplot(table.filter(pl.col('transform').eq('ident') & pl.col('female_only').eq(True)),
+               x='target',
+               y='score',
+               hue='includes_age'
+              )
+    pyplot.suptitle("variance from randomizing train-test split")
+    pyplot.title("elastic net linear model R2 scores out of sample (females only)")
+    pyplot.show()
     

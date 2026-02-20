@@ -1,4 +1,8 @@
 
+import sys
+import IPython
+sys.breakpointhook = IPython.core.debugger.set_trace
+
 import polars as pl
 from polars import selectors as cs
 from sklearn.model_selection import ShuffleSplit
@@ -35,14 +39,17 @@ class DataLoader:
     RNG_STATE = 346
     TEST_FRAC = 0.2
     
-    def __init__(self, rng_state=None):
+    def __init__(self, rng_state=None, female_only=False):
         samp_desc = data.read_sampledesc()
         multiorg_olink = data.read_multiorgan_olink()
-        multiorg_olink = data.clear_excess_nullcols(multiorg_olink, self.ORGAN_NULL_TOL)
+        #if not female_only:
+        #multiorg_olink = data.clear_excess_nullcols(multiorg_olink, self.ORGAN_NULL_TOL)
         serum = data.read_serum()
         serum = data.clear_excess_nullcols(serum, self.MS_NULL_TOL)
         dataset = data.combine(samp_desc, multiorg_olink, serum)
         dataset = dataset.select(cs.exclude(cs.ends_with("_right")))
+        if female_only:
+            dataset = dataset.filter(pl.col('Sex').eq('F'))
         dataset = dataset.select(cs.numeric(), 
                                  pl.col('Sex').eq('F').alias('is_F'), 
                                  pl.col('Strain').eq('B6').alias('is_B6')
@@ -219,7 +226,7 @@ def build_model(train_x, train_y, exp_rel, deg_free=3, scale=5):
     # during sampling
     global_df = 3
     local_df = 3
-    
+    #breakpoint()
     with pm.Model() as model:
         x = pm.Data('x', train_x)
         ydata = pm.Data('ydata', train_y)
@@ -236,10 +243,13 @@ def build_model(train_x, train_y, exp_rel, deg_free=3, scale=5):
         beta = pm.Normal('beta', mu=0, sigma=1, shape=d_params)
         weights = pm.Deterministic('weights', beta * local_shrink * global_shrink)
         
-        icpt = pm.Normal('icpt', mu=0, sigma=10)
+        icpt = pm.Normal('icpt', mu=0, sigma=5)
         
-        y=pm.Normal('y', mu=pm.math.dot(x, weights) + icpt, sigma=sigma, observed=ydata)
+        lin = pm.math.dot(x, weights) + icpt
         
+        y = pm.Normal('y', mu=lin, sigma=sigma, observed=ydata)
+        
+        #breakpoint()
     return model
 
 
@@ -253,7 +263,8 @@ class DataPrep:
     def fit_transform(self, data):
         data1 = self.imputer.fit_transform(data)
         notspecial = data1.select(pl.exclude("is_F", "is_B6", "Age (weeks)"))
-        data2 = self.clust_rep.fit_transform(notspecial)
+        #data2 = self.clust_rep.fit_transform(notspecial)
+        data2 = notspecial
         data3 = pl.concat([data2, data1.select(pl.col('Age (weeks)'))], how='horizontal')
         data4 = self.std_ize.fit_transform(data3)
         data5 = pl.concat([data4, data1.select(pl.col('is_F'), pl.col('is_B6'))], how='horizontal')
@@ -262,21 +273,24 @@ class DataPrep:
     def transform(self, data):
         data1 = self.imputer.transform(data)
         notspecial = data1.select(pl.exclude("is_F", "is_B6", "Age (weeks)"))
-        data2 = self.clust_rep.transform(notspecial)
+        #data2 = self.clust_rep.transform(notspecial)
+        data2 = notspecial
         data3 = pl.concat([data2, data1.select(pl.col('Age (weeks)'))], how='horizontal')
         data4 = self.std_ize.transform(data3)
         data5 = pl.concat([data4, data1.select(pl.col('is_F'), pl.col('is_B6'))], how='horizontal')
         return data5
 
 
+
+
 if __name__ == '__main__':
-    dl = DataLoader()
+    dl = DataLoader(rng_state=155, female_only=True)
     train_x = dl.get_train_predictors()
     
     data_prep = DataPrep(512)
     train_x4 = data_prep.fit_transform(train_x)
     
-    train_y = dl.get_train_target('SK gH2AX')
+    train_y = dl.get_train_target('OV gH2AX')
     train_y2, train_x5 = data.clear_null_response(train_y, train_x4)
 
 
@@ -284,19 +298,20 @@ if __name__ == '__main__':
 
     test_x4 = data_prep.transform(test_x)
     
-    test_y = dl.get_test_target("SK gH2AX")
+    test_y = dl.get_test_target("OV gH2AX")
     test_y2, test_x5 = data.clear_null_response(test_y, test_x4)
     
     # 262 genes identified as senescence-associated by literature data-mining
     # https://pmc.ncbi.nlm.nih.gov/articles/PMC3273898/
     model = build_model(train_x5, train_y2, 262)
+    #breakpoint()
     compiled_model = nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')
     #adapting_model = compiled_model.with_transform_adapt()
     #need more stability - more sampling than normal
-    trace = nutpie.sample(compiled_model, target_accept=0.99, tune=1000, draws=6000, chains=6, cores=6)
+    trace = nutpie.sample(compiled_model, target_accept=0.99, tune=1000, draws=2000, chains=6, cores=6)
     
-    g = model.to_graphviz()
-    g.render("modelskel.gv.s", directory="bayes_figs")
+    #g = model.to_graphviz()
+    #g.render("modelskel.gv.s", directory="bayes_figs")
 
     with model:
         prior = pm.sample_prior_predictive()
@@ -320,7 +335,7 @@ if __name__ == '__main__':
     az.plot_loo_pit(trace, 'y')
     pyplot.show()
     
-    ax = az.plot_ppc(trace)
+    ax = az.plot_ppc(trace, num_pp_samples=200)
     ax.legend(loc='upper right')
     pyplot.show()
     
@@ -416,6 +431,6 @@ if __name__ == '__main__':
     pyplot.text(x=2.0, y=1.75, s="Very Strong\nEvidence", color="purple")
     pyplot.text(x=2.0, y=2.25, s="Decisive\nEvidence", color="purple")
     
-    pyplot.title("Skin γH2AX predictor associations")
+    pyplot.title("Ovary γH2AX predictor associations")
     
     pyplot.show()
