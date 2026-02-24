@@ -196,6 +196,37 @@ class ClusterDecompositionSparsePCA(ClusterTransform):
         return self.transform(dtable)
 
 
+def intercept_model(train_x, train_y):
+    """build an intercept-only model to see if a sub-population-specific constant
+    is enough to explain the entire distribution.
+    Needs X to only contain sex and strain information"""
+    with pm.Model() as model:
+        x = pm.Data('x', train_x)
+        # first cat
+        x1 = pm.Deterministic('x1', x[:,0]*x[:,1])
+        # second cat
+        x2 = pm.Deterministic('x2', x[:,0] * (-x[:,1]+1))
+        # third cat
+        x3 = pm.Deterministic('x3', (-x[:,0]+1) * x[:,1])
+        # fourth cat
+        x4 = pm.Deterministic('x4', (-x[:,0]+1) * (-x[:,1]+1))
+        
+        ydata = pm.Data('ydata', train_y)
+        
+        base = pm.Normal('base', mu=0, sigma=5)
+        
+        offsets = pm.Exponential('offsets', lam=0.2, shape=[4])
+        signs = pm.Normal('signs', mu=0, sigma=1, shape=[4])
+        
+        sigma = pm.HalfNormal('sigma', sigma=2.5)
+        
+        mean = base + (x1*offsets[0]*signs[0]) + (x2*offsets[1]*signs[1]) + (x3*offsets[2]*signs[2]) + (x4*offsets[3]*signs[3])
+        
+        y = pm.Normal('y', mu=mean, sigma=sigma, observed=ydata)
+
+    
+    return model
+
 def build_model(train_x, train_y, exp_rel, deg_free=3, scale=5):
     """builds modified hierarchical horseshoe prior regression using input
     training data.
@@ -290,7 +321,7 @@ if __name__ == '__main__':
     data_prep = DataPrep(512)
     train_x4 = data_prep.fit_transform(train_x)
     
-    train_y = dl.get_train_target('OV gH2AX')
+    train_y = dl.get_train_target('SK gH2AX')
     train_y2, train_x5 = data.clear_null_response(train_y, train_x4)
 
 
@@ -298,9 +329,9 @@ if __name__ == '__main__':
 
     test_x4 = data_prep.transform(test_x)
     
-    test_y = dl.get_test_target("OV gH2AX")
+    test_y = dl.get_test_target("SK gH2AX")
     test_y2, test_x5 = data.clear_null_response(test_y, test_x4)
-    
+    assert False
     # 262 genes identified as senescence-associated by literature data-mining
     # https://pmc.ncbi.nlm.nih.gov/articles/PMC3273898/
     model = build_model(train_x5, train_y2, 262)
