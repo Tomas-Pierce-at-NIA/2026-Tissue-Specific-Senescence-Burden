@@ -1,8 +1,0 @@
-digraph {
-	subgraph "clusterSex (2) x Strain (2)" {
-		icpt [label="icpt
-~
-Normal" shape=ellipse]
-		label="Sex (2) x Strain (2)" labeljust=r labelloc=b style=rounded
-	}
-}
