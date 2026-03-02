@@ -1,4 +1,6 @@
 
+import json
+
 import polars as pl
 
 import pymc as pm
@@ -7,6 +9,8 @@ import arviz as az
 from matplotlib import pyplot
 import numpy as np
 
+
+from reduce_collinear_feature import ClusterRepSel
 from dataloader import DataLoader
 from data_prep import DataPrep
 import data
@@ -58,20 +62,66 @@ def horseshoe_model(train_x, train_demo, train_y, exp_rel, nz_df=3, nz_scale=5):
 
 
 if __name__ == '__main__':
+    target_name = 'SK gH2AX'
     dl = DataLoader()
     dprep = DataPrep()
     train_x = dl.get_train_predictors()
     train_demo = dl.get_train_demographics()
-    train_y = dl.get_train_target('SK p21').log10()
+    train_y = dl.get_train_target(target_name)
     
     train_x2 = dprep.fit_transform(train_x)
-    #train_demo2 = demo_transform(dl.get_demographic_dimensions(), train_demo)
     
     train_y2, train_x3 = data.clear_null_response(train_y, train_x2)
     _, train_demo2 = data.clear_null_response(train_y, train_demo)
     train_demo3 = demo_transform(dl.get_demographic_dimensions(), train_demo2)
-    hs = horseshoe_model(train_x3, train_demo3, train_y2, 262)
+    
+    clust_sel = ClusterRepSel(1024)
+    train_x4 = clust_sel.fit_transform(train_x3)
+    
+    if 'Age (weeks)' not in train_x4.columns:
+        train_x5 = pl.concat([train_x4, train_x3.select(pl.col('Age (weeks)'))], how='horizontal')
+    else:
+        train_x5 = train_x4
+    
+    hs = horseshoe_model(train_x5, train_demo3, train_y2, 262)
     
     compiled_model = nutpie.compile_pymc_model(hs, backend='jax', gradient_backend='jax')
     trace = nutpie.sample(compiled_model, target_accept=0.95, tune=1000, draws=2000)
+    
+    with hs:
+        prior = pm.sample_prior_predictive()
+        ppc = pm.sample_posterior_predictive(trace)
+        trace.extend(prior)
+        trace.extend(ppc)
+        loglike = pm.compute_log_likelihood(trace)
+        trace.extend(loglike)
+    
+    test_y = dl.get_test_target(target_name)
+    test_x = dl.get_test_predictors()
+    test_demo = dl.get_test_demographics()
+    
+    test_x2 = dprep.transform(test_x)
+    test_y2, test_x3 = data.clear_null_response(test_y, test_x2)
+    _, test_demo2 = data.clear_null_response(test_y, test_demo)
+    
+    test_demo3 = demo_transform(dl.get_demographic_dimensions(), test_demo2)
+    
+    test_x4 = clust_sel.transform(test_x3)
+    
+    if 'Age (weeks)' not in test_x4.columns:
+        test_x5 = pl.concat([test_x4, test_x3.select(pl.col('Age (weeks)'))], how='horizontal')
+    else:
+        test_x5 = test_x4
+    
+    with hs:
+        pm.set_data({'x': test_x5, 'demo': test_demo3, 'ydata': test_y2})
+        preds = pm.sample_posterior_predictive(trace, predictions=True)
+    
+    trace.extend(preds)
+    
+    with open("out/features_used.json", "w") as feat_hand:
+        json.dump(train_x5.columns, feat_hand)
+    
+    trace.to_netcdf("out/trace.netcdf")
+    
     
