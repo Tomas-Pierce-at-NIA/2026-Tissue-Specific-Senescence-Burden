@@ -61,8 +61,7 @@ def horseshoe_model(train_x, train_demo, train_y, exp_rel, nz_df=3, nz_scale=5):
     return model
 
 
-if __name__ == '__main__':
-    target_name = 'SK gH2AX'
+def main(target_name):
     dl = DataLoader()
     dprep = DataPrep()
     train_x = dl.get_train_predictors()
@@ -123,5 +122,9 @@ if __name__ == '__main__':
         json.dump(train_x5.columns, feat_hand)
     
     trace.to_netcdf("out/trace.netcdf")
-    
+
+
+if __name__ == '__main__':
+    target = 'SK gH2AX'
+    main(target)
     
