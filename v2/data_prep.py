@@ -7,7 +7,7 @@ class DataPrep:
     
     def __init__(self):
         
-        self.scaler = pre.RobustScaler()
+        self.scaler = pre.StandardScaler()
         self.scaler.set_output(transform='polars')
         
         self.imputer = impute.KNNImputer(n_neighbors=7, weights='distance')

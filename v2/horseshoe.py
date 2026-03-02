@@ -62,7 +62,7 @@ if __name__ == '__main__':
     dprep = DataPrep()
     train_x = dl.get_train_predictors()
     train_demo = dl.get_train_demographics()
-    train_y = dl.get_train_target('SK gH2AX')
+    train_y = dl.get_train_target('SK p21').log10()
     
     train_x2 = dprep.fit_transform(train_x)
     #train_demo2 = demo_transform(dl.get_demographic_dimensions(), train_demo)
