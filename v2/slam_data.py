@@ -1,5 +1,6 @@
 
 import polars as pl
+from polars import selectors as cs
 
 SLAM_EUTH = "data/slam900/Slam_900_phenotypes_combined w fast-fed.xlsx"
 SLAM_LONG_SERUM = "data/slam900/slam_900_counts_phenotypes.csv"
@@ -54,4 +55,35 @@ def combine_serum_euth(serum_tab, euth_tab):
     no_id_euth = euth_tab.select(pl.exclude('ID'))
     return serum_tab.join(no_id_euth, how='left', on=['SLAMICS ID', 'Age', 'Sex', 'Strain'])
 
+
+def load_slam900_longitudinal():
+    """Load in the longitudinal SLAM900 dataset 
+    and do initial data setup steps including
+    adding the euthanasia information and ensuring
+    appropriate data types"""
+    euth = read_euth()
+    serum = read_serum()
+    combo = combine_serum_euth(serum, euth)
+    tab = combo.select(pl.exclude(['Visit', 'IDVisit']))
+    tab = tab.select(
+        pl.col(['SLAMICS ID', 
+                'Sex', 
+                'Strain', 
+                'Age', 
+                'ID', 
+                'Cohort', 
+                'is_euthanized', 
+                'gets_euthanized'
+                ]),
+        pl.exclude(['SLAMICS ID', 
+                    'Sex', 
+                    'Strain', 
+                    'Age', 
+                    'ID', 
+                    'Cohort', 
+                    'is_euthanized', 
+                    'gets_euthanized'
+                    ]).cast(pl.Float64)
+    )
+    return tab
 
