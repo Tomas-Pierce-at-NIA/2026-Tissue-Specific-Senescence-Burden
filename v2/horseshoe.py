@@ -144,12 +144,12 @@ def main(target_name, resp_transform=identity, female_only=False):
 
 
 if __name__ == '__main__':
-    #target = 'SK gH2AX'
-    #tr = main(target, identity)
+    target = 'SK gH2AX'
+    tr = main(target, identity)
     #target = 'SK p21'
     #tr = main(target, log10_transform)
-    target = 'SK p16'
-    tr = main(target, log10_transform)
+    #target = 'SK p16'
+    #tr = main(target, log10_transform)
     #target = 'OV gH2AX'
     #tr = main(target, identity, True)
     #tr = main(target, identity)
