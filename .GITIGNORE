@@ -3,4 +3,5 @@ out/
 __pycache__/
 v2/data/
 old/
+referenced_lit/
 thisrepo_token.txt
