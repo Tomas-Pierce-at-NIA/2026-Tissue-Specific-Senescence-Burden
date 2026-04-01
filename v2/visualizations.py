@@ -60,7 +60,7 @@ def bf_volcano(w_sum):
     ax.axhline(0.5, linestyle='--', color='grey')
     ax.axhline(1.0, linestyle='--', color='grey')
     ymin, ymax = ax.get_ylim()
-    ax.set_ylim(0.0, ymax)
+    #ax.set_ylim(0.0, ymax)
     
     text_items = []
     for idx in range(len(left_5)):
@@ -108,6 +108,9 @@ if __name__ == '__main__':
     labeled_weight_summary = labeled_weight_summary.with_columns(bf)
     
     _fig, _ax, labeled = bf_volcano(labeled_weight_summary)
+    _fig.tight_layout()
+    pyplot.savefig("out/weights_volcanolike.svg", format="svg", bbox_inches="tight")
+    pyplot.show()
     draw_label_table(labeled)
     pyplot.show()
     
@@ -123,11 +126,17 @@ if __name__ == '__main__':
     az.plot_loo_pit(trace, 'y')
     pyplot.show()
     
+    az.plot_loo_pit(trace, 'y', ecdf=True)
+    pyplot.show()
+    
+    az.plot_bpv(trace)
+    pyplot.show()
+    
     az.plot_bpv(trace, kind='p_value')
     pyplot.show()
     
-    az.plot_bf(trace.isel(weights_dim_0=99), 'weights', ref_val=0.0)
-    pyplot.show()
+    #az.plot_bf(trace.isel(weights_dim_0=99), 'weights', ref_val=0.0)
+    #pyplot.show()
     
     r2 = az.r2_score(trace.predictions_constant_data['ydata'].values, 
                 trace.predictions.stack(sample=('chain','draw'))['y'].T.values

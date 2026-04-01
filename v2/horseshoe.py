@@ -61,8 +61,20 @@ def horseshoe_model(train_x, train_demo, train_y, exp_rel, nz_df=3, nz_scale=5):
     return model
 
 
-def main(target_name):
-    dl = DataLoader()
+def identity(target_data):
+    return target_data
+
+
+def log10_transform(target_data):
+    return target_data.log10()
+
+def sqrt_transform(target_data):
+    return target_data.sqrt()
+#def offset_log10(target_data, offset=1e-15):
+    #return (target_data + offset).log10()
+
+def main(target_name, resp_transform=identity, female_only=False):
+    dl = DataLoader(female_only=female_only)
     dprep = DataPrep()
     train_x = dl.get_train_predictors()
     train_demo = dl.get_train_demographics()
@@ -82,7 +94,10 @@ def main(target_name):
     else:
         train_x5 = train_x4
     
-    hs = horseshoe_model(train_x5, train_demo3, train_y2, 262)
+    train_y3 = resp_transform(train_y2)
+    
+    # https://pmc.ncbi.nlm.nih.gov/articles/PMC3273898/
+    hs = horseshoe_model(train_x5, train_demo3, train_y3, 262)
     
     compiled_model = nutpie.compile_pymc_model(hs, backend='jax', gradient_backend='jax')
     trace = nutpie.sample(compiled_model, target_accept=0.95, tune=1000, draws=2000)
@@ -112,8 +127,10 @@ def main(target_name):
     else:
         test_x5 = test_x4
     
+    test_y3 = resp_transform(test_y2)
+    
     with hs:
-        pm.set_data({'x': test_x5, 'demo': test_demo3, 'ydata': test_y2})
+        pm.set_data({'x': test_x5, 'demo': test_demo3, 'ydata': test_y3})
         preds = pm.sample_posterior_predictive(trace, predictions=True)
     
     trace.extend(preds)
@@ -122,9 +139,19 @@ def main(target_name):
         json.dump(train_x5.columns, feat_hand)
     
     trace.to_netcdf("out/trace.netcdf")
+    
+    return trace
 
 
 if __name__ == '__main__':
-    target = 'SK gH2AX'
-    main(target)
+    #target = 'SK gH2AX'
+    #tr = main(target, identity)
+    #target = 'SK p21'
+    #tr = main(target, log10_transform)
+    target = 'SK p16'
+    tr = main(target, log10_transform)
+    #target = 'OV gH2AX'
+    #tr = main(target, identity, True)
+    #tr = main(target, identity)
+    
     
