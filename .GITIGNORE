@@ -2,3 +2,5 @@ data/
 out/
 __pycache__/
 v2/data/
+old/
+thisrepo_token.txt
