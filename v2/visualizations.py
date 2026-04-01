@@ -7,6 +7,7 @@ import seaborn as sb
 from adjustText import adjust_text
 import json
 
+import data
 
 def get_feature_names():
     with open("out/features_used.json") as feat_hand:
@@ -34,7 +35,7 @@ def weights_bayes_factors(trace, w_sum):
     return space
 
 
-def bf_volcano(w_sum):
+def bf_volcano(w_sum, gp_tab):
     fig, ax = pyplot.subplots()
     weights_color = w_sum.with_columns(
         evidence = pl.when(pl.col('BayesFactor').log10() < 1)
@@ -48,7 +49,9 @@ def bf_volcano(w_sum):
     )
     
     left_5 = weights_color.filter(pl.col('mean') < 0).sort('BayesFactor').tail(5).sort('mean')
+    left_5 = left_5.join(gp_tab, how='left', left_on=['feat_names'], right_on=['Protein Names'])
     right_5 = weights_color.filter(pl.col('mean') > 0).sort('BayesFactor').tail(5).sort('mean')
+    right_5 = right_5.join(gp_tab, how='left', left_on=['feat_names'], right_on=['Protein Names'])
     
     palette = {'weak': 'grey', 
                'strong negative association': 'blue', 
@@ -61,13 +64,13 @@ def bf_volcano(w_sum):
     ax.axhline(1.0, linestyle='--', color='grey')
     ymin, ymax = ax.get_ylim()
     #ax.set_ylim(0.0, ymax)
-    
+    #breakpoint()
     text_items = []
     for idx in range(len(left_5)):
-        txt = ax.text(x=left_5[idx, "mean"], y=left_5[idx, "bf_log10"], s=str(idx+1))
+        txt = ax.text(x=left_5[idx, "mean"], y=left_5[idx, "bf_log10"], s=left_5[idx, "Gene Names"])
         text_items.append(txt)
     for idx in range(len(right_5)):
-        txt = ax.text(x=right_5[idx, "mean"], y=right_5[idx, "bf_log10"], s=str(5-idx))
+        txt = ax.text(x=right_5[idx, "mean"], y=right_5[idx, "bf_log10"], s=right_5[idx, "Gene Names"])
         text_items.append(txt)
     
     adjust_text(text_items, time_lim=5, arrowprops=dict(arrowstyle='->', color='black'))
@@ -87,19 +90,10 @@ def bf_volcano(w_sum):
     
     return fig, ax, labeled
 
-def draw_label_table(labeled):
-    fig, ax = pyplot.subplots()
-    table = ax.table(labeled, 
-                         cellLoc='center', 
-                         rowLoc='center', 
-                         colLoc='center', 
-                         loc='center',
-                         colWidths=[0.8, 0.1, 0.1],
-                         colLabels=["name", "label", "mean"]
-                         )
-    fig.tight_layout()
+
 
 if __name__ == '__main__':
+    gene_prot_nametab = data.create_protein_gene_mapping()
     trace = get_trace()
     features = get_feature_names()
     labeled_weight_summary = labeled_w(trace, features)
@@ -107,12 +101,12 @@ if __name__ == '__main__':
     bf = pl.Series("BayesFactor", bayes_factors)
     labeled_weight_summary = labeled_weight_summary.with_columns(bf)
     
-    _fig, _ax, labeled = bf_volcano(labeled_weight_summary)
+    _fig, _ax, labeled = bf_volcano(labeled_weight_summary, gene_prot_nametab)
     _fig.tight_layout()
     pyplot.savefig("out/weights_volcanolike.svg", format="svg", bbox_inches="tight")
     pyplot.show()
-    draw_label_table(labeled)
-    pyplot.show()
+    #draw_label_table(labeled)
+    #pyplot.show()
     
     az.plot_energy(trace)
     pyplot.show()
@@ -135,8 +129,6 @@ if __name__ == '__main__':
     az.plot_bpv(trace, kind='p_value')
     pyplot.show()
     
-    #az.plot_bf(trace.isel(weights_dim_0=99), 'weights', ref_val=0.0)
-    #pyplot.show()
     
     r2 = az.r2_score(trace.predictions_constant_data['ydata'].values, 
                 trace.predictions.stack(sample=('chain','draw'))['y'].T.values

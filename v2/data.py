@@ -231,3 +231,20 @@ def numerize_predictors(predictors):
     no_cat_colinear = dummied.select(pl.exclude(['Sex_M', 'Strain_HET3']))
     return no_cat_colinear
 
+
+def create_protein_gene_mapping() -> pl.DataFrame:
+    """Creates a dataframe which maps between protein names and gene codes based on 
+    the genes actually present in the mouse serum data
+    """
+    
+    lazy = pl.scan_csv(SERUM,
+                       separator="\t"
+                       )
+    tab = lazy.select(pl.col('Protein Names'), pl.col('Gene Names'))
+    tab_uni = tab.unique()
+    
+    tab_present = tab_uni.collect()
+    
+    return tab_present
+
+
