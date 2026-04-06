@@ -134,7 +134,7 @@ def main(target_name, resp_transform=identity, female_only=False):
     _, train_demo2 = data.clear_null_response(train_y, train_demo)
     train_demo3 = demo_transform(dl.get_demographic_dimensions(), train_demo2)
     
-    clust_sel = ClusterRepSel(1024)
+    clust_sel = ClusterRepSel(2048)
     train_x4 = clust_sel.fit_transform(train_x3)
     
     if 'Age (weeks)' not in train_x4.columns:
@@ -145,7 +145,7 @@ def main(target_name, resp_transform=identity, female_only=False):
     train_y3 = resp_transform(train_y2)
     
     # https://pmc.ncbi.nlm.nih.gov/articles/PMC3273898/
-    hs = horseshoe_model(train_x5, train_demo3, train_y3, 262)
+    hs = horseshoe_model(train_x5, train_demo3, train_y3, 1279)
     #hs = censored_horseshoe_model(train_x5, train_demo3, train_y3, 262)
     
     compiled_model = nutpie.compile_pymc_model(hs, backend='jax', gradient_backend='jax')
