@@ -1,5 +1,6 @@
 
 import polars as pl
+import nutpie
 
 import data
 from dataloader import DataLoader
@@ -35,12 +36,14 @@ if __name__ == '__main__':
     train_x5 = clust_sel.fit_transform(train_x4)
     
     if 'Age (weeks)' not in train_x5.columns:
-        train_x6 = pl.concat([train_x5, train_x4.select(pl.col('Age (weeks)'))], how='horizontal')
+        _, train_age = data.clear_null_response(train_y, train_x.select(pl.col('Age (weeks)')))
+        train_x6 = pl.concat([train_x5, train_age], how='horizontal')
     else:
         train_x6 = train_x5
     
     model = horseshoe.horseshoe_model(train_x6, train_demo3, train_y2, 262)
-    
+    compiled_model = nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')
+    trace = nutpie.sample(compiled_model, target_accept=0.95, tune=1000, draws=2000)
     
     
     
