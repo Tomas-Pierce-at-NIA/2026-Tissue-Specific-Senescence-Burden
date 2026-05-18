@@ -97,13 +97,13 @@ def censored_horseshoe_model(train_x, train_demo, train_y, exp_rel, nz_df=3, nz_
         
         lin = icpt[demo[:,0], demo[:,1]] + pm.math.dot(x, weights)
         
-        censor = pm.Exponential('censor', lam=1)
+        #censor = pm.Exponential('censor', lam=1)
         
-        y_implicit = pm.Normal.dist(mu=lin, sigma=sigma)
+        #y_implicit = pm.Normal.dist(mu=lin, sigma=sigma)
         
-        y = pm.Censored('y', y_implicit, lower=censor, observed=ydata)
+        #y = pm.Censored('y', y_implicit, lower=censor, observed=ydata)
         
-        #y = pm.Normal('y', mu=lin, sigma=sigma, observed=ydata)
+        y = pm.Normal('y', mu=lin, sigma=sigma, observed=ydata)
     
     return model
 
@@ -134,7 +134,7 @@ def main(target_name, resp_transform=identity, female_only=False):
     _, train_demo2 = data.clear_null_response(train_y, train_demo)
     train_demo3 = demo_transform(dl.get_demographic_dimensions(), train_demo2)
     
-    clust_sel = ClusterRepSel(2048)
+    clust_sel = ClusterRepSel(1024)
     train_x4 = clust_sel.fit_transform(train_x3)
     
     if 'Age (weeks)' not in train_x4.columns:
@@ -145,7 +145,7 @@ def main(target_name, resp_transform=identity, female_only=False):
     train_y3 = resp_transform(train_y2)
     
     # https://pmc.ncbi.nlm.nih.gov/articles/PMC3273898/
-    hs = horseshoe_model(train_x5, train_demo3, train_y3, 1279)
+    hs = horseshoe_model(train_x5, train_demo3, train_y3, 262)
     #hs = censored_horseshoe_model(train_x5, train_demo3, train_y3, 262)
     
     compiled_model = nutpie.compile_pymc_model(hs, backend='jax', gradient_backend='jax')
